@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
-import random
 import ssl
 import time
 import urllib.error
@@ -177,36 +175,3 @@ def fetch_best_daily(asset: str, limit: int = 365) -> tuple[list[Candle], list[s
             errors.append(f"{name}: {exc}")
     return [], errors
 
-
-def make_demo_daily(asset: str, days: int = 365, seed: int = 11) -> list[Candle]:
-    asset = asset.upper()
-    rng = random.Random((seed * 97) + (1 if asset == "BTC" else 2))
-    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    price = 66_000.0 if asset == "BTC" else 3_400.0
-    vol = 0.035 if asset == "BTC" else 0.045
-    candles: list[Candle] = []
-    for index in range(days, 0, -1):
-        ts = start.timestamp() - index * 86_400
-        drift = 0.0004 if asset == "BTC" else 0.0002
-        shock = rng.gauss(drift, vol)
-        open_price = price
-        close = max(1.0, price * math.exp(shock))
-        spread = abs(rng.gauss(0.0, vol * 0.55))
-        high = max(open_price, close) * (1.0 + spread)
-        low = min(open_price, close) * max(0.2, 1.0 - spread)
-        volume = rng.uniform(25_000.0, 140_000.0)
-        candles.append(
-            Candle(
-                asset=asset,
-                ts=datetime.fromtimestamp(ts, timezone.utc).isoformat(),
-                open=open_price,
-                high=high,
-                low=low,
-                close=close,
-                volume=volume,
-                source="demo",
-                interval="1d",
-            )
-        )
-        price = close
-    return candles

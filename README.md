@@ -10,17 +10,16 @@ does not place orders.
 Implemented:
 
 - Local dashboard at `http://127.0.0.1:8765`
-- Demo BTC / ETH barrier-market backtest
 - BTC / ETH daily candle storage and ingestion
-- BTC / ETH barrier-market metadata storage and CSV/demo ingestion
+- BTC / ETH barrier-market metadata storage and CSV / JSON ingestion
 - Monte Carlo touch-probability model
 - Fee and slippage adjusted YES-edge calculation
-- SQLite storage for backtest runs and trades
+- Real-data scanner for BTC / ETH barrier markets
 - Existing read-only Polymarket binary-combo scanner in `polym_scanner.py`
 
 The `superpowers` component is implemented locally as a Python package under
 `polymtrade/superpowers/`. It contains the composable research capabilities for
-barrier probability, cost-adjusted edge, and demo market generation.
+barrier probability and cost-adjusted edge.
 
 ## Run
 
@@ -34,22 +33,10 @@ Then open:
 http://127.0.0.1:8765
 ```
 
-Import offline demo BTC / ETH candles:
-
-```bash
-python3 -m polymtrade.research.ingest_prices --source demo --days 365
-```
-
 Try public Binance candles when the network can reach it:
 
 ```bash
 python3 -m polymtrade.research.ingest_prices --source binance --days 365
-```
-
-Import demo barrier-market metadata:
-
-```bash
-python3 -m polymtrade.research.ingest_markets --demo
 ```
 
 Fetch real BTC / ETH barrier-market metadata from Polymarket Gamma API:
@@ -79,6 +66,15 @@ python3 -m polymtrade.research.ingest_markets \
   --json data/raw/polymtrade-search-bitcoin-hit.json \
   --json data/raw/polymtrade-search-ethereum-hit.json \
   --price-history --history-source polymtrade --history-limit 10
+```
+
+Import saved Binance daily candle CSV files:
+
+```bash
+python3 -m polymtrade.research.ingest_prices \
+  --csv data/raw/BTCUSDT_1d_binance.csv \
+  --csv data/raw/ETHUSDT_1d_binance.csv \
+  --csv-source binance-data-api
 ```
 
 Import a real Polymarket market CSV:

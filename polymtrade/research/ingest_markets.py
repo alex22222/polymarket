@@ -19,7 +19,6 @@ from polymtrade.storage.db import (
     upsert_barrier_markets,
     upsert_market_price_history,
 )
-from polymtrade.superpowers.demo_data import make_demo_markets
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,7 +30,6 @@ def parse_args() -> argparse.Namespace:
         action="append",
         help="Gamma market JSON file or API response JSON; can be repeated",
     )
-    parser.add_argument("--demo", action="store_true", help="Import demo barrier markets")
     parser.add_argument("--gamma", action="store_true", help="Fetch real markets from Polymarket Gamma API")
     parser.add_argument("--gamma-search", action="store_true", help="Fetch real markets from Gamma public-search")
     parser.add_argument("--pages", type=int, default=3)
@@ -61,27 +59,6 @@ def record_from_row(row: dict[str, str], source: str) -> dict | None:
         "source": source,
         "raw_json": json.dumps(row, ensure_ascii=False),
     }
-
-
-def demo_records() -> list[dict]:
-    records: list[dict] = []
-    for item in make_demo_markets():
-        parsed = parse_barrier_question(item.question)
-        if not parsed:
-            continue
-        records.append(
-            {
-                "market_id": item.market_id,
-                "question": item.question,
-                "asset": parsed.asset,
-                "barrier": parsed.barrier,
-                "direction": parsed.direction,
-                "deadline_text": parsed.deadline_text,
-                "source": "demo",
-                "raw_json": None,
-            }
-        )
-    return records
 
 
 def csv_records(path: Path) -> list[dict]:
@@ -114,8 +91,6 @@ def json_records(path: Path) -> list[dict]:
 def main() -> int:
     args = parse_args()
     records: list[dict] = []
-    if args.demo:
-        records.extend(demo_records())
     if args.csv_path:
         records.extend(csv_records(Path(args.csv_path)))
     for json_path in args.json_paths or []:

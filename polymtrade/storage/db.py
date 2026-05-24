@@ -254,7 +254,13 @@ def candles_for_asset(
             from crypto_candles
             where asset = ?
             group by source
-            order by case source when 'binance' then 0 when 'coinbase' then 1 when 'demo' then 2 else 3 end,
+            order by case source
+                       when 'binance-data-api' then 0
+                       when 'binance' then 1
+                       when 'okx' then 2
+                       when 'coinbase' then 3
+                       else 5
+                     end,
                      count(*) desc
             limit 1
             """,

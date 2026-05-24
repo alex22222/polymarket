@@ -32,7 +32,14 @@ def parse_barrier_question(question: str) -> ParsedBarrierMarket | None:
 
     lowered = question.lower()
     direction = "hit_above"
-    if "below" in lowered or "under" in lowered or "drop" in lowered:
+    if (
+        "below" in lowered
+        or "under" in lowered
+        or "drop" in lowered
+        or "dip" in lowered
+        or "less than" in lowered
+        or "lower than" in lowered
+    ):
         direction = "hit_below"
 
     date_match = DATE_RE.search(question)

@@ -5,22 +5,19 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from polymtrade.data.crypto_prices import fetch_best_daily, make_demo_daily
+from polymtrade.data.crypto_prices import fetch_best_daily
 from polymtrade.data.polymarket_api import (
     fetch_gamma_markets,
     fetch_polymtrade_crypto_events,
     search_gamma_barrier_markets,
     search_polymtrade_barrier_markets,
 )
-from polymtrade.research.backtest import run_demo_backtest
+from polymtrade.research.scanner import scan_opportunities
 from polymtrade.storage.db import (
     barrier_market_summary,
     candle_summary,
     candles_for_asset,
     connect,
-    insert_run,
-    latest_runs,
-    latest_trades,
     market_price_history_summary,
     upsert_candles,
     upsert_barrier_markets,
@@ -49,11 +46,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         path = parsed.path
         query = parse_qs(parsed.query)
         if path == "/api/health":
-            self.send_json({"ok": True, "mode": "offline-first"})
-            return
-        if path == "/api/dashboard":
-            with connect(DB_PATH) as conn:
-                self.send_json({"runs": latest_runs(conn), "trades": latest_trades(conn)})
+            self.send_json({"ok": True, "mode": "real-first"})
             return
         if path == "/api/data-summary":
             with connect(DB_PATH) as conn:
@@ -72,13 +65,23 @@ class AppHandler(SimpleHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 self.send_json({"asset": asset, "candles": candles_for_asset(conn, asset, source, limit)})
             return
-        if path == "/api/seed-demo-prices":
-            candles = []
-            for asset in ("BTC", "ETH"):
-                candles.extend(make_demo_daily(asset, days=365))
+        if path == "/api/scanner":
+            limit = int(query.get("limit", ["50"])[0])
+            edge_threshold = float(query.get("edge", ["0.02"])[0])
+            min_liquidity = float(query.get("min_liquidity", ["500"])[0])
+            simulations = int(query.get("simulations", ["1500"])[0])
+            vol_window = query.get("vol_window", ["90d"])[0]
             with connect(DB_PATH) as conn:
-                inserted = upsert_candles(conn, candles)
-                self.send_json({"ok": True, "source": "demo", "candles": inserted, "summary": candle_summary(conn)})
+                self.send_json(
+                    scan_opportunities(
+                        conn,
+                        limit=limit,
+                        edge_threshold=edge_threshold,
+                        min_liquidity=min_liquidity,
+                        simulations=simulations,
+                        vol_window=vol_window,
+                    )
+                )
             return
         if path == "/api/fetch-crypto-prices":
             candles = []
@@ -136,14 +139,6 @@ class AppHandler(SimpleHTTPRequestHandler):
                     },
                     status=200 if records else 502,
                 )
-            return
-        if path == "/api/run-demo-backtest":
-            result = run_demo_backtest()
-            run = dict(result["run"])
-            run.pop("equity_curve")
-            with connect(DB_PATH) as conn:
-                run_id = insert_run(conn, run, result["trades"])
-            self.send_json({"run_id": run_id, "run": result["run"], "trades": result["trades"]})
             return
         if path == "/":
             self.path = "/index.html"

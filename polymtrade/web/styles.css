@@ -122,7 +122,9 @@ h2 {
 .metrics article,
 .chart-panel,
 .side-panel,
+.edge-panel,
 .table-section,
+.scanner-section,
 .data-section,
 .price-panel,
 .coverage-panel {
@@ -137,7 +139,7 @@ h2 {
   padding: 18px;
 }
 
-.metrics span,
+.metrics article > span,
 .section-head span,
 .stack-list span {
   color: var(--muted);
@@ -147,8 +149,9 @@ h2 {
 .metrics strong {
   display: block;
   margin-top: 12px;
-  font-size: 28px;
+  font-size: clamp(20px, 2.2vw, 28px);
   letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
 
 .workspace {
@@ -160,7 +163,9 @@ h2 {
 
 .chart-panel,
 .side-panel,
+.edge-panel,
 .table-section,
+.scanner-section,
 .data-section,
 .price-panel,
 .coverage-panel {
@@ -215,6 +220,10 @@ canvas {
   margin-top: 16px;
 }
 
+.scanner-section {
+  margin-top: 16px;
+}
+
 .data-section {
   margin-top: 16px;
 }
@@ -223,6 +232,10 @@ canvas {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
   gap: 16px;
+}
+
+.coverage-grid {
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
 }
 
 .price-panel,
@@ -278,6 +291,84 @@ canvas {
   line-height: 1.45;
 }
 
+.scanner-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.edge-panel {
+  box-shadow: none;
+  margin-bottom: 14px;
+}
+
+.edge-panel canvas {
+  height: 300px;
+}
+
+.scanner-summary article {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfa;
+  min-height: 78px;
+  padding: 12px;
+}
+
+.scanner-summary span {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+}
+
+.scanner-summary strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 22px;
+}
+
+.status-line {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 14px 0 0;
+}
+
+.scanner-table {
+  min-width: 1260px;
+}
+
+.pill {
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.positive-pill {
+  background: #e8f5ef;
+  color: var(--green);
+}
+
+.negative-pill {
+  background: #fae9ed;
+  color: var(--red);
+}
+
+.warning-pill {
+  background: #fff4df;
+  color: #8a5a00;
+}
+
+.neutral-pill {
+  background: #eef2f7;
+  color: var(--blue);
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -325,7 +416,9 @@ td.question {
 
   .metrics,
   .workspace,
-  .data-grid {
+  .data-grid,
+  .coverage-grid,
+  .scanner-summary {
     grid-template-columns: 1fr;
   }
 
