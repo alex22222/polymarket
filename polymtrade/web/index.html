@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Polymtrade Research</title>
+    <link rel="stylesheet" href="/styles.css?v=2" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">BTC / ETH Barrier Research</p>
+          <h1>Polymtrade</h1>
+        </div>
+        <div class="actions">
+          <button id="refreshBtn" class="icon-btn" title="刷新数据" aria-label="刷新数据">↻</button>
+          <button id="runBtn" class="primary-btn">运行 Demo 回测</button>
+        </div>
+      </header>
+
+      <section class="metrics" aria-label="核心指标">
+        <article>
+          <span>总收益</span>
+          <strong id="totalReturn">--</strong>
+        </article>
+        <article>
+          <span>交易数</span>
+          <strong id="tradeCount">--</strong>
+        </article>
+        <article>
+          <span>胜率</span>
+          <strong id="winRate">--</strong>
+        </article>
+        <article>
+          <span>最大回撤</span>
+          <strong id="maxDrawdown">--</strong>
+        </article>
+        <article>
+          <span>Profit Factor</span>
+          <strong id="profitFactor">--</strong>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <div class="chart-panel">
+          <div class="section-head">
+            <h2>权益曲线</h2>
+            <span id="statusText">离线优先模式</span>
+          </div>
+          <canvas id="equityChart" width="1100" height="420"></canvas>
+        </div>
+
+        <aside class="side-panel">
+          <div class="section-head">
+            <h2>策略栈</h2>
+          </div>
+          <div class="stack-list">
+            <div><span>数据</span><strong>BTC / ETH + 宏观扩展预留</strong></div>
+            <div><span>模型</span><strong>Monte Carlo Touch Probability</strong></div>
+            <div><span>成本</span><strong>Taker Fee + Slippage</strong></div>
+            <div><span>执行</span><strong>只读 / Paper Trading</strong></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="data-section">
+        <div class="section-head">
+          <h2>数据覆盖</h2>
+          <div class="actions compact">
+            <button id="seedDemoBtn" class="secondary-btn">导入 Demo 价格</button>
+            <button id="fetchPricesBtn" class="secondary-btn">抓取真实价格</button>
+            <button id="fetchMarketsBtn" class="secondary-btn">抓取真实市场</button>
+          </div>
+        </div>
+        <div class="data-grid">
+          <div class="price-panel">
+            <div class="section-head">
+              <h2>价格序列</h2>
+              <div class="segmented" aria-label="资产切换">
+                <button class="asset-toggle active" data-asset="BTC">BTC</button>
+                <button class="asset-toggle" data-asset="ETH">ETH</button>
+              </div>
+            </div>
+            <canvas id="priceChart" width="900" height="340"></canvas>
+          </div>
+          <div class="coverage-panel">
+            <div id="coverageRows" class="coverage-rows"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="table-section">
+        <div class="section-head">
+          <h2>最近交易信号</h2>
+          <span id="lastRun">尚未运行</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>资产</th>
+                <th>市场</th>
+                <th>Ask</th>
+                <th>模型概率</th>
+                <th>净 Edge</th>
+                <th>ROI</th>
+                <th>Stake</th>
+                <th>PnL</th>
+              </tr>
+            </thead>
+            <tbody id="tradeRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js?v=3"></script>
+  </body>
+</html>
