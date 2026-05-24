@@ -17,6 +17,8 @@ CLOB_PRICES_HISTORY_URL = "https://clob.polymarket.com/prices-history"
 POLYMTRADE_PUBLIC_SEARCH_URL = "https://polym.trade/gapi/public-search"
 POLYMTRADE_EVENTS_KEYSET_URL = "https://polym.trade/gapi/events/keyset"
 POLYMTRADE_CLOB_PRICES_HISTORY_URL = "https://polym.trade/clob/prices-history"
+POLYMTRADE_CLOB_BOOK_URL = "https://polym.trade/clob/book"
+CLOB_BOOK_URL = "https://clob.polymarket.com/book"
 
 
 def get_json(url: str, params: dict[str, Any] | None = None, timeout: int = 8, retries: int = 1) -> Any:
@@ -300,6 +302,12 @@ def fetch_prices_history(
         except (KeyError, TypeError, ValueError):
             continue
     return parsed
+
+
+def fetch_order_book(token_id: str, source: str = "polymtrade", timeout: int = 10) -> dict[str, Any]:
+    url = POLYMTRADE_CLOB_BOOK_URL if source == "polymtrade" else CLOB_BOOK_URL
+    data = get_json(url, {"token_id": token_id}, timeout=timeout, retries=0)
+    return data if isinstance(data, dict) else {}
 
 
 def price_history_records(

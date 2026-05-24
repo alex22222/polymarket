@@ -71,6 +71,10 @@ class AppHandler(SimpleHTTPRequestHandler):
             min_liquidity = float(query.get("min_liquidity", ["500"])[0])
             simulations = int(query.get("simulations", ["1500"])[0])
             vol_window = query.get("vol_window", ["90d"])[0]
+            orderbook = query.get("orderbook", ["0"])[0] in {"1", "true", "yes"}
+            book_limit = int(query.get("book_limit", ["30"])[0])
+            executable_notional = float(query.get("executable_notional", ["100"])[0])
+            book_timeout = int(query.get("book_timeout", ["4"])[0])
             with connect(DB_PATH) as conn:
                 self.send_json(
                     scan_opportunities(
@@ -80,6 +84,10 @@ class AppHandler(SimpleHTTPRequestHandler):
                         min_liquidity=min_liquidity,
                         simulations=simulations,
                         vol_window=vol_window,
+                        orderbook=orderbook,
+                        book_limit=book_limit,
+                        executable_notional=executable_notional,
+                        book_timeout=book_timeout,
                     )
                 )
             return

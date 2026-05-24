@@ -334,7 +334,7 @@ canvas {
 }
 
 .scanner-table {
-  min-width: 1260px;
+  min-width: 1380px;
 }
 
 .pill {
@@ -396,6 +396,14 @@ th {
 
 td.question {
   max-width: 420px;
+}
+
+td small {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 3px;
 }
 
 .positive {

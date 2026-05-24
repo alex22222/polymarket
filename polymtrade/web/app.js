@@ -57,6 +57,20 @@ function actionLabel(action) {
   return `<span class="pill neutral-pill">观察</span>`;
 }
 
+function priceCell(row) {
+  const main = percent(row.market_yes_price);
+  if (row.pricing_source !== "orderbook") return `${main}<small>cached</small>`;
+  const spread = Number.isFinite(Number(row.spread)) ? `spread ${percent(row.spread)}` : "spread --";
+  const ask = Number.isFinite(Number(row.best_ask)) ? `ask ${percent(row.best_ask)}` : "ask --";
+  return `${main}<small>${ask} · ${spread}</small>`;
+}
+
+function fillCell(row) {
+  if (row.pricing_source !== "orderbook") return "--";
+  const fill = row.complete_fill ? "full" : "partial";
+  return `${money(row.executable_notional)}<small>${fill}</small>`;
+}
+
 function scannerRowsForAsset(asset) {
   return (lastScanner?.opportunities || []).filter((row) => row.asset === asset);
 }
@@ -295,11 +309,13 @@ function renderScanner(data) {
   els.stackData.textContent = contextSources || "无真实价格源";
   els.stackModel.textContent = `${assumptions.vol_window || "90d"} realized vol${selectedVol ? ` · ${percent(selectedVol)}` : ""} · ${assumptions.simulations || 0} paths`;
   els.stackCost.textContent = `fee ${percent(assumptions.fee_rate)} · slippage ${Number(assumptions.slippage_bps || 0).toFixed(0)} bps · min edge ${percent(assumptions.edge_threshold)}`;
-  els.stackExecution.textContent = `只读 scanner · min liquidity ${money(assumptions.min_liquidity)} · ${summary.candidates ?? 0} candidates`;
+  els.stackExecution.textContent = assumptions.orderbook
+    ? `order book ${summary.orderbook_priced ?? 0}/${assumptions.book_limit} · ${money(assumptions.executable_notional)} test size · ${summary.candidates ?? 0} candidates`
+    : `cached price · min liquidity ${money(assumptions.min_liquidity)} · ${summary.candidates ?? 0} candidates`;
   drawEdgeChart(rows);
   drawPriceChart(lastPrices);
   if (!rows.length) {
-    els.scannerRows.innerHTML = `<tr><td colspan="12">暂无可扫描市场</td></tr>`;
+    els.scannerRows.innerHTML = `<tr><td colspan="13">暂无可扫描市场</td></tr>`;
     return;
   }
   els.scannerRows.innerHTML = rows
@@ -313,10 +329,11 @@ function renderScanner(data) {
           <td>${money(row.spot)}</td>
           <td>${money(row.barrier)}</td>
           <td>${number(row.days_to_expiry, 1)}d</td>
-          <td>${percent(row.market_yes_price)}</td>
+          <td>${priceCell(row)}</td>
           <td>${percent(row.model_probability)}</td>
           <td>${signedPercent(row.net_edge)}</td>
           <td>${signedPercent(row.roi)}</td>
+          <td>${fillCell(row)}</td>
           <td>${money(row.liquidity)}</td>
         </tr>
       `,
@@ -372,9 +389,9 @@ async function loadScanner() {
   els.topScanBtn.disabled = true;
   els.scanBtn.disabled = true;
   els.scannerMeta.textContent = "运行中";
-  els.scannerRows.innerHTML = `<tr><td colspan="12">Scanner 正在计算...</td></tr>`;
+  els.scannerRows.innerHTML = `<tr><td colspan="13">Scanner 正在计算盘口与模型概率...</td></tr>`;
   try {
-    const response = await fetch("/api/scanner?limit=50&edge=0.02&min_liquidity=500&simulations=1500&vol_window=90d");
+    const response = await fetch("/api/scanner?limit=50&edge=0.02&min_liquidity=500&simulations=800&vol_window=90d&orderbook=1&book_limit=8&executable_notional=100&book_timeout=4");
     if (!response.ok) {
       throw new Error(`scanner api ${response.status}`);
     }
@@ -383,7 +400,7 @@ async function loadScanner() {
     els.statusText.textContent = `Scanner 已更新：${data.summary?.candidates ?? 0} 个候选`;
   } catch (error) {
     els.scannerMeta.textContent = "失败";
-    els.scannerRows.innerHTML = `<tr><td colspan="12">Scanner API 请求失败：${error.message}</td></tr>`;
+    els.scannerRows.innerHTML = `<tr><td colspan="13">Scanner API 请求失败：${error.message}</td></tr>`;
     els.statusText.textContent = `Scanner 失败：${error.message}`;
   } finally {
     els.topScanBtn.disabled = false;
