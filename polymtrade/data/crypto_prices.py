@@ -11,9 +11,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
+BINANCE_DATA_API_TICKER_URL = "https://data-api.binance.vision/api/v3/ticker/price"
 COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product}/candles"
 OKX_HISTORY_CANDLES_URL = "https://www.okx.com/api/v5/market/history-candles"
+OKX_TICKER_URL = "https://www.okx.com/api/v5/market/ticker"
 SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
 COINBASE_PRODUCTS = {"BTC": "BTC-USD", "ETH": "ETH-USD"}
 OKX_PRODUCTS = {"BTC": "BTC-USDT", "ETH": "ETH-USDT"}
@@ -30,6 +32,14 @@ class Candle:
     volume: float
     source: str
     interval: str
+
+
+@dataclass(frozen=True)
+class SpotQuote:
+    asset: str
+    price: float
+    source: str
+    fetched_at: str
 
 
 def _get_json(url: str, params: dict[str, Any], timeout: int = 8, retries: int = 1) -> Any:
@@ -162,6 +172,46 @@ def fetch_okx_daily(asset: str, limit: int = 365) -> list[Candle]:
     return candles
 
 
+def fetch_binance_data_api_spot(asset: str, timeout: int = 4) -> SpotQuote:
+    asset = asset.upper()
+    payload = _get_json(BINANCE_DATA_API_TICKER_URL, {"symbol": SYMBOLS[asset]}, timeout=timeout, retries=0)
+    return SpotQuote(
+        asset=asset,
+        price=float(payload["price"]),
+        source="binance-data-api-ticker",
+        fetched_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def fetch_okx_spot(asset: str, timeout: int = 4) -> SpotQuote:
+    asset = asset.upper()
+    payload = _get_json(OKX_TICKER_URL, {"instId": OKX_PRODUCTS[asset]}, timeout=timeout, retries=0)
+    if str(payload.get("code")) != "0":
+        raise RuntimeError(f"OKX error {payload.get('code')}: {payload.get('msg')}")
+    rows = payload.get("data") or []
+    if not rows:
+        raise RuntimeError("OKX returned no ticker rows")
+    return SpotQuote(
+        asset=asset,
+        price=float(rows[0]["last"]),
+        source="okx-ticker",
+        fetched_at=datetime.fromtimestamp(int(rows[0]["ts"]) / 1000, timezone.utc).isoformat(),
+    )
+
+
+def fetch_best_spot(asset: str, timeout: int = 4) -> tuple[SpotQuote | None, list[str]]:
+    errors: list[str] = []
+    for name, fetcher in (
+        ("binance-data-api", fetch_binance_data_api_spot),
+        ("okx", fetch_okx_spot),
+    ):
+        try:
+            return fetcher(asset, timeout=timeout), errors
+        except Exception as exc:  # noqa: BLE001 - caller needs source-level failure context
+            errors.append(f"{name}: {exc}")
+    return None, errors
+
+
 def fetch_best_daily(asset: str, limit: int = 365) -> tuple[list[Candle], list[str]]:
     errors: list[str] = []
     for name, fetcher in (
@@ -174,4 +224,3 @@ def fetch_best_daily(asset: str, limit: int = 365) -> tuple[list[Candle], list[s
         except Exception as exc:  # noqa: BLE001 - caller needs source-level failure context
             errors.append(f"{name}: {exc}")
     return [], errors
-

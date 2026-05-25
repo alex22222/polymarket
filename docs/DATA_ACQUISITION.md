@@ -270,9 +270,16 @@ python3 scripts/fetch_crypto_history.py \
 ## 7. 文件清单
 
 ```
+docs/
+├── README.md                   # 项目主文档
+├── ROADMAP.md                  # 开发路线图
+├── INTERFACE_REVIEW.md         # 接口审查报告
+├── FACTOR_ANALYSIS.md          # BTC/ETH 定价因子深度分析
+├── DATA_ACQUISITION.md         # 数据获取指南（本文档）
+└── DATA_SOURCES.md             # 数据源速查表
+
 data/raw/
 ├── BTCUSDT_1d_binance.csv      # 测试样本（370 条，2025-05-20 至 2026-05-24）
-├── DATA_SOURCES.md             # 数据源速查表
 ├── .gitkeep                    # 保留空目录
 └── polymtrade-assets/          # JS 静态资源（从 polym.trade 缓存）
     ├── index.js
@@ -281,11 +288,8 @@ data/raw/
     └── page.js
 
 scripts/
-├── fetch_crypto_history.py     # 批量下载脚本（新增）
+├── fetch_crypto_history.py     # 批量下载脚本
 └── fetch_real_data_bundle.sh   # 已有脚本
-
-docs/
-└── DATA_ACQUISITION.md         # 本文档
 ```
 
 ---

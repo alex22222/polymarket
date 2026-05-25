@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Polymtrade Research</title>
-    <link rel="stylesheet" href="/styles.css?v=7" />
+    <link rel="stylesheet" href="/styles.css?v=12" />
   </head>
   <body>
     <main class="shell">
@@ -15,9 +15,19 @@
         </div>
         <div class="actions">
           <button id="refreshBtn" class="icon-btn" title="刷新数据" aria-label="刷新数据">↻</button>
+          <button id="logBtn" class="secondary-btn">
+            系统日志 <span id="logBadge" class="log-badge">0</span>
+          </button>
           <button id="topScanBtn" class="primary-btn">运行 Scanner</button>
         </div>
       </header>
+
+      <nav class="view-tabs" aria-label="模块视图">
+        <button class="view-tab active" data-view-tab="overview">总览</button>
+        <button class="view-tab" data-view-tab="analysis">分析&监控</button>
+        <button class="view-tab" data-view-tab="research">研究记录</button>
+        <button class="view-tab" data-view-tab="scanner">Scanner</button>
+      </nav>
 
       <section class="metrics" aria-label="核心指标">
         <article>
@@ -42,7 +52,7 @@
         </article>
       </section>
 
-      <section class="workspace">
+      <section class="workspace view-section" data-view="overview">
         <div class="chart-panel">
           <div class="section-head">
             <h2>价格序列</h2>
@@ -67,7 +77,7 @@
         </aside>
       </section>
 
-      <section class="data-section">
+      <section class="data-section view-section" data-view="overview">
         <div class="section-head">
           <h2>数据覆盖</h2>
           <div class="actions compact">
@@ -75,10 +85,99 @@
             <button id="fetchMarketsBtn" class="secondary-btn">抓取真实市场</button>
           </div>
         </div>
+        <div id="dataQualityRows" class="data-quality-rows">
+          <div class="data-quality-row"><strong>等待数据质量检查</strong><span>检查 BTC / ETH 历史 K 线覆盖、缺口、新鲜度和异常跳变。</span></div>
+        </div>
         <div id="coverageRows" class="coverage-rows coverage-grid"></div>
       </section>
 
-      <section class="scanner-section">
+      <section class="health-section view-section hidden" data-view="analysis">
+        <div class="section-head">
+          <h2>自动化健康</h2>
+          <div class="actions compact">
+            <span id="automationMeta">等待自动任务</span>
+            <button id="refreshHealthBtn" class="secondary-btn">刷新健康</button>
+          </div>
+        </div>
+        <div class="health-grid">
+          <article><span>状态</span><strong id="automationStatus">--</strong></article>
+          <article><span>最近运行</span><strong id="automationAge">--</strong></article>
+          <article><span>观测 run</span><strong id="automationRuns">--</strong></article>
+          <article><span>候选记录</span><strong id="automationCandidates">--</strong></article>
+        </div>
+        <div id="automationDetail" class="health-detail">暂无自动化日志</div>
+        <div id="sourceHealthRows" class="source-health-rows">
+          <div class="source-health-row"><strong>等待源级别健康数据</strong><span>下一次自动任务会写入 Gamma / Polymtrade / Deribit / Binance 状态。</span></div>
+        </div>
+      </section>
+
+      <section class="observation-section view-section hidden" data-view="research">
+        <div class="section-head">
+          <h2>研究记录</h2>
+          <div class="actions compact">
+            <span id="observationSummary">尚未保存观测</span>
+            <button id="saveObservationBtn" class="secondary-btn">保存本次观测</button>
+          </div>
+        </div>
+        <div id="observationRows" class="observation-rows">
+          <div class="coverage-row"><strong>等待 scanner</strong><span>保存后可用于 walk-forward 和 paper trading 验证。</span></div>
+        </div>
+      </section>
+
+      <section class="quality-section view-section hidden" data-view="analysis">
+        <div class="section-head">
+          <h2>候选质量分析</h2>
+          <div class="actions compact">
+            <span id="qualityMeta">等待候选样本</span>
+            <button id="refreshQualityBtn" class="secondary-btn">刷新分析</button>
+          </div>
+        </div>
+        <div class="quality-summary">
+          <article><span>候选样本</span><strong id="qualityTracked">--</strong></article>
+          <article><span>已结算</span><strong id="qualityResolved">--</strong></article>
+          <article><span>未结算</span><strong id="qualityOpen">--</strong></article>
+          <article><span>分组</span><strong id="qualityGroups">--</strong></article>
+        </div>
+        <div class="table-wrap">
+          <table class="quality-table">
+            <thead>
+              <tr>
+                <th>维度</th>
+                <th>分组</th>
+                <th>样本</th>
+                <th>已结算</th>
+                <th>胜率</th>
+                <th>ROI</th>
+                <th>平均 Edge</th>
+                <th>平均 Spread</th>
+              </tr>
+            </thead>
+            <tbody id="qualityRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="paper-section view-section hidden" data-view="research">
+        <div class="section-head">
+          <h2>Paper Trading</h2>
+          <div class="actions compact">
+            <span id="paperMeta">等待候选观测</span>
+            <button id="refreshPaperBtn" class="secondary-btn">刷新结果</button>
+          </div>
+        </div>
+        <div class="paper-summary">
+          <article><span>已跟踪</span><strong id="paperTracked">--</strong></article>
+          <article><span>已结算</span><strong id="paperResolved">--</strong></article>
+          <article><span>胜率</span><strong id="paperWinRate">--</strong></article>
+          <article><span>模拟 PnL</span><strong id="paperPnl">--</strong></article>
+          <article><span>开放敞口</span><strong id="paperExposure">--</strong></article>
+        </div>
+        <div id="paperRows" class="paper-rows">
+          <div class="coverage-row"><strong>暂无候选观测</strong><span>保存 candidate 后，这里会跟踪是否触及 barrier。</span></div>
+        </div>
+      </section>
+
+      <section class="scanner-section view-section hidden" data-view="scanner">
         <div class="section-head">
           <h2>Scanner</h2>
           <div class="actions compact">
@@ -115,19 +214,20 @@
           <table class="scanner-table">
             <thead>
               <tr>
-                <th>动作</th>
-                <th>资产</th>
-                <th>市场</th>
-                <th>方向</th>
-                <th>现价</th>
-                <th>目标</th>
-                <th>到期</th>
-                <th>买入均价</th>
-                <th>模型</th>
-                <th>净 Edge</th>
-                <th>ROI</th>
-                <th>可成交</th>
-                <th>流动性</th>
+                <th class="sortable" data-sort="action">动作</th>
+                <th class="sortable" data-sort="review_status">复核</th>
+                <th class="sortable" data-sort="asset">资产</th>
+                <th class="sortable" data-sort="question">市场</th>
+                <th class="sortable" data-sort="direction">方向</th>
+                <th class="sortable" data-sort="spot">现价</th>
+                <th class="sortable" data-sort="barrier">目标</th>
+                <th class="sortable" data-sort="days_to_expiry">到期</th>
+                <th class="sortable" data-sort="ask_price">买入均价</th>
+                <th class="sortable" data-sort="model_probability">模型</th>
+                <th class="sortable" data-sort="net_edge">净 Edge</th>
+                <th class="sortable" data-sort="roi">ROI</th>
+                <th class="sortable" data-sort="executable_notional">可成交</th>
+                <th class="sortable" data-sort="liquidity">流动性</th>
               </tr>
             </thead>
             <tbody id="scannerRows"></tbody>
@@ -135,8 +235,37 @@
         </div>
       </section>
 
+      <div id="logPanel" class="log-panel-overlay hidden">
+        <div class="log-panel">
+          <div class="log-panel-header">
+            <h2>系统日志</h2>
+            <div class="actions compact">
+              <select id="logLevelFilter" class="log-filter" title="级别过滤">
+                <option value="">全部</option>
+                <option value="INFO">INFO</option>
+                <option value="WARN">WARN</option>
+                <option value="ERROR">ERROR</option>
+              </select>
+              <select id="logModuleFilter" class="log-filter" title="模块过滤">
+                <option value="">全部</option>
+                <option value="system">system</option>
+                <option value="scanner">scanner</option>
+                <option value="data">data</option>
+              </select>
+              <button id="refreshLogsBtn" class="secondary-btn" title="刷新日志">↻</button>
+              <button id="clearLogsBtn" class="secondary-btn danger" title="清空旧日志">清空</button>
+              <button id="logPanelClose" class="icon-btn" title="关闭">✕</button>
+            </div>
+          </div>
+          <div class="log-meta" id="logMeta">加载中...</div>
+          <div class="log-list" id="logList">
+            <div class="log-empty">暂无日志</div>
+          </div>
+        </div>
+      </div>
+
       <p id="statusText" class="status-line">读取本地数据库</p>
     </main>
-    <script src="/app.js?v=11"></script>
+    <script src="/app.js?v=21"></script>
   </body>
 </html>

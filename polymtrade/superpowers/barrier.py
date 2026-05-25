@@ -41,6 +41,22 @@ def realized_volatility(prices: list[float], periods_per_year: float = TRADING_D
     return max(0.05, min(2.5, math.sqrt(variance * periods_per_year)))
 
 
+def ewma_volatility(prices: list[float], decay: float = 0.94, periods_per_year: float = TRADING_DAYS) -> float:
+    if len(prices) < 3:
+        return realized_volatility(prices, periods_per_year=periods_per_year)
+    returns: list[float] = []
+    for previous, current in zip(prices, prices[1:]):
+        if previous > 0 and current > 0:
+            returns.append(math.log(current / previous))
+    if len(returns) < 2:
+        return realized_volatility(prices, periods_per_year=periods_per_year)
+    variance = returns[0] * returns[0]
+    alpha = max(0.0, min(0.999, decay))
+    for item in returns[1:]:
+        variance = alpha * variance + (1.0 - alpha) * item * item
+    return max(0.05, min(2.5, math.sqrt(variance * periods_per_year)))
+
+
 def monte_carlo_touch_probability(
     item: BarrierInput,
     simulations: int = 8_000,
@@ -88,4 +104,3 @@ def edge_for_yes(model_probability: float, ask_price: float, fee_rate: float, sl
         "net_ev": net_ev,
         "roi": roi,
     }
-

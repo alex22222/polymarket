@@ -6,19 +6,22 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from polymtrade.data.derivatives import fetch_deribit_option_summaries, select_atm_iv
+from polymtrade.data.crypto_prices import fetch_best_spot
 from polymtrade.data.polymarket_api import fetch_order_book
-from polymtrade.storage.db import connect
+from polymtrade.storage.db import connect, data_quality_report
 from polymtrade.superpowers.barrier import (
     BarrierInput,
     edge_for_yes,
+    ewma_volatility,
     monte_carlo_touch_probability,
     realized_volatility,
 )
 
 
 SOURCE_PRIORITY = {
-    "binance-data-api": 0,
-    "binance": 1,
+    "binance": 0,
+    "binance-data-api": 1,
     "okx": 2,
     "coinbase": 3,
 }
@@ -43,6 +46,12 @@ def stable_seed(*parts: object) -> int:
 
 
 def preferred_price_source(conn, asset: str) -> str | None:
+    try:
+        recommended = (data_quality_report(conn).get("recommendations") or {}).get(asset.upper()) or {}
+        if recommended.get("source") and recommended.get("status") != "error":
+            return str(recommended["source"])
+    except Exception:
+        pass
     rows = conn.execute(
         """
         select source, count(*) as candles
@@ -58,7 +67,13 @@ def preferred_price_source(conn, asset: str) -> str | None:
     return best["source"]
 
 
-def price_context(conn, asset: str, max_window: int = 180) -> dict[str, Any] | None:
+def price_context(
+    conn,
+    asset: str,
+    max_window: int = 180,
+    realtime_spot: bool = True,
+    spot_timeout: int = 4,
+) -> dict[str, Any] | None:
     source = preferred_price_source(conn, asset)
     if not source:
         return None
@@ -76,17 +91,87 @@ def price_context(conn, asset: str, max_window: int = 180) -> dict[str, Any] | N
     closes = [float(row["close"]) for row in ordered]
     if not closes:
         return None
+    spot = closes[-1]
+    spot_source = f"{source}:daily-close"
+    spot_fetched_at = ordered[-1]["ts"]
+    spot_is_realtime = False
+    spot_errors: list[str] = []
+    if realtime_spot:
+        quote, spot_errors = fetch_best_spot(asset, timeout=spot_timeout)
+        if quote:
+            spot = quote.price
+            spot_source = quote.source
+            spot_fetched_at = quote.fetched_at
+            spot_is_realtime = True
     vols = {}
     for window in (30, 90, 180):
         prices = closes[-(window + 1) :]
         vols[f"{window}d"] = realized_volatility(prices)
+    ewma = ewma_volatility(closes)
     return {
         "asset": asset,
-        "source": source,
-        "spot": closes[-1],
+        "source": spot_source,
+        "candle_source": source,
+        "spot": spot,
+        "daily_close": closes[-1],
+        "spot_fetched_at": spot_fetched_at,
+        "spot_is_realtime": spot_is_realtime,
+        "spot_errors": spot_errors,
         "last_ts": ordered[-1]["ts"],
         "candles": len(ordered),
         "volatility": vols,
+        "ewma_volatility": ewma,
+    }
+
+
+def fetch_iv_surfaces(assets: tuple[str, ...], timeout: int = 3) -> tuple[dict[str, list[dict[str, Any]]], dict[str, str]]:
+    surfaces: dict[str, list[dict[str, Any]]] = {}
+    errors: dict[str, str] = {}
+    for asset in assets:
+        try:
+            surfaces[asset] = fetch_deribit_option_summaries(asset, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - scanner must degrade when Deribit is unavailable
+            surfaces[asset] = []
+            errors[asset] = str(exc)
+    return surfaces, errors
+
+
+def blended_annual_vol(
+    context: dict[str, Any],
+    vol_window: str,
+    iv_quote: Any | None,
+    vol_model: str,
+) -> tuple[float, dict[str, Any]]:
+    rv = float(context["volatility"].get(vol_window) or context["volatility"]["90d"])
+    ewma = float(context.get("ewma_volatility") or rv)
+    if vol_model == "rv":
+        return rv, {
+            "source": f"rv-{vol_window}",
+            "rv": rv,
+            "ewma": ewma,
+            "iv": None,
+            "weights": {"rv": 1.0, "ewma": 0.0, "iv": 0.0},
+        }
+    if iv_quote:
+        iv = float(iv_quote.annual_vol)
+        vol = 0.60 * iv + 0.25 * ewma + 0.15 * rv
+        return vol, {
+            "source": "iv-ewma-rv",
+            "rv": rv,
+            "ewma": ewma,
+            "iv": iv,
+            "weights": {"rv": 0.15, "ewma": 0.25, "iv": 0.60},
+            "iv_instrument": iv_quote.instrument_name,
+            "iv_expiry": iv_quote.expiry,
+            "iv_strike": iv_quote.strike,
+        }
+    vol = 0.70 * ewma + 0.30 * rv
+    return vol, {
+        "source": "ewma-rv",
+        "rv": rv,
+        "ewma": ewma,
+        "iv": None,
+        "weights": {"rv": 0.30, "ewma": 0.70, "iv": 0.0},
     }
 
 
@@ -165,12 +250,30 @@ def fill_buy_notional(asks: list[dict[str, float]], max_notional: float) -> dict
     }
 
 
+def parse_orderbook_timestamp(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return parse_datetime(str(value))
+    if numeric > 10_000_000_000:
+        numeric /= 1000
+    try:
+        return datetime.fromtimestamp(numeric, timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
 def order_book_metrics(
     token_id: str | None,
     max_notional: float,
     source: str = "polymtrade",
     timeout: int = 4,
+    max_age_seconds: int = 120,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
+    now = now or datetime.now(timezone.utc)
     if not token_id:
         return {"orderbook_source": "missing-token", "orderbook_error": "missing yes_token_id"}
     try:
@@ -184,9 +287,16 @@ def order_book_metrics(
     best_ask = asks[0]["price"] if asks else None
     fill = fill_buy_notional(asks, max_notional) if asks else {}
     avg_price = fill.get("avg_price")
+    book_at = parse_orderbook_timestamp(book.get("timestamp"))
+    book_age = (now - book_at).total_seconds() if book_at else None
+    if book_age is not None:
+        book_age = max(0.0, book_age)
     return {
         "orderbook_source": source,
         "orderbook_timestamp": book.get("timestamp"),
+        "orderbook_at": book_at.isoformat() if book_at else None,
+        "orderbook_age_seconds": book_age,
+        "orderbook_is_fresh": book_age is not None and book_age <= max_age_seconds,
         "best_bid": best_bid,
         "best_ask": best_ask,
         "spread": (best_ask - best_bid) if best_bid is not None and best_ask is not None else None,
@@ -199,6 +309,93 @@ def order_book_metrics(
         "complete_fill": fill.get("complete_fill"),
         "orderbook_error": None,
     }
+
+
+def add_review(
+    row: dict[str, Any],
+    edge_threshold: float,
+    orderbook_enabled: bool,
+    require_realtime_spot: bool,
+    max_book_age_seconds: int,
+    max_spread: float,
+) -> None:
+    checks: list[dict[str, str]] = []
+    blockers: list[str] = []
+
+    def check(name: str, status: str, detail: str) -> None:
+        checks.append({"name": name, "status": status, "detail": detail})
+        if status == "fail":
+            blockers.append(detail)
+
+    if row.get("already_touched"):
+        check("touch", "verify", "现货已触及目标，需要人工核验")
+    else:
+        check("touch", "pass", "尚未触及目标")
+
+    if require_realtime_spot:
+        if row.get("spot_is_realtime"):
+            check("spot", "pass", f"实时现货来自 {row.get('spot_source')}")
+        else:
+            check("spot", "fail", "现货退回日线收盘价")
+    elif row.get("spot_is_realtime"):
+        check("spot", "pass", f"实时现货来自 {row.get('spot_source')}")
+    else:
+        check("spot", "warn", "使用最新日线收盘价")
+
+    vol_source = str(row.get("annual_vol_source") or "")
+    if "iv" in vol_source:
+        check("vol", "pass", f"波动率使用 {vol_source}")
+    elif vol_source:
+        check("vol", "warn", f"波动率使用 {vol_source}")
+
+    if orderbook_enabled:
+        if row.get("pricing_source") != "orderbook":
+            check("book", "fail", row.get("orderbook_error") or "实时盘口不可用")
+        else:
+            age = row.get("orderbook_age_seconds")
+            if row.get("orderbook_is_fresh"):
+                check("book", "pass", f"盘口 age {age:.0f}s" if isinstance(age, (int, float)) else "盘口时间戳新鲜")
+            else:
+                check("book", "fail", f"盘口超过 {max_book_age_seconds}s 未更新")
+
+            if row.get("executable_price") is None:
+                check("fill", "fail", "没有可买入 ask 深度")
+            elif row.get("complete_fill"):
+                check("fill", "pass", "测试金额可完整成交")
+            else:
+                check("fill", "fail", "测试金额只能部分成交")
+
+            spread = row.get("spread")
+            if spread is None:
+                check("spread", "warn", "价差不可用")
+            elif float(spread) <= max_spread:
+                check("spread", "pass", f"价差 {float(spread):.3f}")
+            else:
+                check("spread", "fail", f"价差 {float(spread):.3f} 高于 {max_spread:.3f}")
+
+    if row.get("net_edge") is None:
+        check("edge", "fail", "净 edge 不可用")
+    elif float(row["net_edge"]) >= edge_threshold:
+        check("edge", "pass", "净 edge 达标")
+    elif float(row["net_edge"]) <= -edge_threshold:
+        check("edge", "fail", "净 edge 显著为负")
+    else:
+        check("edge", "warn", "净 edge 未达阈值")
+
+    row["review_checks"] = checks
+    row["review_blockers"] = blockers
+    if row.get("already_touched"):
+        row["action"] = "verify"
+        row["review_status"] = "verify"
+    elif blockers:
+        row["action"] = "avoid" if row.get("net_edge") is not None and float(row["net_edge"]) <= -edge_threshold else "watch"
+        row["review_status"] = "blocked"
+    elif row.get("net_edge") is not None and float(row["net_edge"]) >= edge_threshold:
+        row["action"] = "candidate"
+        row["review_status"] = "passed"
+    else:
+        row["action"] = "watch"
+        row["review_status"] = "watch"
 
 
 def opportunity_sort_key(row: dict[str, Any]) -> tuple[int, float, float]:
@@ -217,15 +414,31 @@ def scan_opportunities(
     max_yes_price: float = 0.995,
     simulations: int = 1_500,
     vol_window: str = "90d",
+    vol_model: str = "factor",
+    iv_timeout: int = 3,
     orderbook: bool = False,
     book_limit: int = 30,
     executable_notional: float = 100.0,
     book_source: str = "polymtrade",
     book_timeout: int = 4,
+    max_book_age_seconds: int = 120,
+    max_spread: float = 0.04,
+    realtime_spot: bool = True,
+    require_realtime_spot: bool = True,
+    spot_timeout: int = 4,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
-    contexts = {asset: price_context(conn, asset) for asset in ("BTC", "ETH")}
+    contexts = {
+        asset: price_context(conn, asset, realtime_spot=realtime_spot, spot_timeout=spot_timeout)
+        for asset in ("BTC", "ETH")
+    }
+    iv_surfaces, iv_errors = fetch_iv_surfaces(("BTC", "ETH"), timeout=iv_timeout) if vol_model == "factor" else ({}, {})
+    for asset, context in contexts.items():
+        if context:
+            context["iv_source"] = "deribit-atm-iv" if iv_surfaces.get(asset) else None
+            context["iv_error"] = iv_errors.get(asset)
+            context["vol_model"] = vol_model
     opportunities: list[dict[str, Any]] = []
     skipped = 0
     scanned = 0
@@ -262,7 +475,16 @@ def scan_opportunities(
             if direction == "hit_above"
             else float(context["spot"]) <= float(market["barrier"])
         )
-        vol = float(context["volatility"].get(vol_window) or context["volatility"]["90d"])
+        iv_quote = None
+        if vol_model == "factor":
+            iv_quote = select_atm_iv(
+                market["asset"],
+                iv_surfaces.get(market["asset"], []),
+                spot=float(context["spot"]),
+                days_to_expiry=days_to_expiry,
+                now=now,
+            )
+        vol, vol_components = blended_annual_vol(context, vol_window, iv_quote, vol_model)
         result = monte_carlo_touch_probability(
             BarrierInput(
                 spot=float(context["spot"]),
@@ -277,13 +499,6 @@ def scan_opportunities(
         )
         costs = edge_for_yes(result.adjusted_probability, yes_price, fee_rate, slippage_bps)
         simple_annualized_roi = costs["roi"] * (365.0 / days_to_expiry) if days_to_expiry > 0 else 0.0
-        action = "watch"
-        if already_touched:
-            action = "verify"
-        elif costs["net_ev"] >= edge_threshold:
-            action = "candidate"
-        elif costs["net_ev"] <= -edge_threshold:
-            action = "avoid"
         opportunities.append(
             {
                 "market_id": market["market_id"],
@@ -305,15 +520,31 @@ def scan_opportunities(
                 "taker_fee": costs["taker_fee"],
                 "slippage": costs["slippage"],
                 "annual_vol": vol,
+                "annual_vol_source": vol_components["source"],
+                "vol_components": vol_components,
                 "already_touched": already_touched,
                 "volume": market.get("volume"),
                 "liquidity": liquidity,
                 "source": market.get("source"),
-                "action": action,
+                "spot_source": context["source"],
+                "spot_fetched_at": context.get("spot_fetched_at"),
+                "spot_is_realtime": context.get("spot_is_realtime"),
+                "daily_close": context.get("daily_close"),
+                "action": "watch",
+                "review_status": "unreviewed",
                 "pricing_source": "cached",
             }
         )
 
+    for row in opportunities:
+        add_review(
+            row,
+            edge_threshold=edge_threshold,
+            orderbook_enabled=False,
+            require_realtime_spot=require_realtime_spot,
+            max_book_age_seconds=max_book_age_seconds,
+            max_spread=max_spread,
+        )
     opportunities.sort(key=opportunity_sort_key, reverse=True)
     if orderbook:
         for row in opportunities[:book_limit]:
@@ -322,29 +553,37 @@ def scan_opportunities(
                 executable_notional,
                 source=book_source,
                 timeout=book_timeout,
+                max_age_seconds=max_book_age_seconds,
+                now=now,
             )
             row.update(book)
             executable_price = row.get("executable_price") or row.get("best_ask")
             if executable_price is None:
                 row["pricing_source"] = "cached-orderbook-unavailable"
-                continue
-            executable_costs = edge_for_yes(row["model_probability"], float(executable_price), fee_rate, slippage_bps)
-            row["market_yes_price"] = float(executable_price)
-            row["gross_edge"] = row["model_probability"] - float(executable_price)
-            row["net_edge"] = executable_costs["net_ev"]
-            row["roi"] = executable_costs["roi"]
-            row["annualized_roi"] = executable_costs["roi"] * (365.0 / row["days_to_expiry"]) if row["days_to_expiry"] > 0 else 0.0
-            row["taker_fee"] = executable_costs["taker_fee"]
-            row["slippage"] = executable_costs["slippage"]
-            row["pricing_source"] = "orderbook"
-            if row["already_touched"]:
-                row["action"] = "verify"
-            elif row["net_edge"] >= edge_threshold:
-                row["action"] = "candidate"
-            elif row["net_edge"] <= -edge_threshold:
-                row["action"] = "avoid"
             else:
-                row["action"] = "watch"
+                executable_costs = edge_for_yes(row["model_probability"], float(executable_price), fee_rate, slippage_bps)
+                row["market_yes_price"] = float(executable_price)
+                row["gross_edge"] = row["model_probability"] - float(executable_price)
+                row["net_edge"] = executable_costs["net_ev"]
+                row["roi"] = executable_costs["roi"]
+                row["annualized_roi"] = (
+                    executable_costs["roi"] * (365.0 / row["days_to_expiry"]) if row["days_to_expiry"] > 0 else 0.0
+                )
+                row["taker_fee"] = executable_costs["taker_fee"]
+                row["slippage"] = executable_costs["slippage"]
+                row["pricing_source"] = "orderbook"
+        for row in opportunities:
+            if row.get("pricing_source") == "cached" and row.get("orderbook_error") is None:
+                row["pricing_source"] = "cached-orderbook-not-sampled"
+                row["orderbook_error"] = "未进入本次盘口抽样范围"
+            add_review(
+                row,
+                edge_threshold=edge_threshold,
+                orderbook_enabled=True,
+                require_realtime_spot=require_realtime_spot,
+                max_book_age_seconds=max_book_age_seconds,
+                max_spread=max_spread,
+            )
         opportunities.sort(key=opportunity_sort_key, reverse=True)
     top = opportunities[:limit]
     candidates = [row for row in opportunities if row["action"] == "candidate"]
@@ -359,11 +598,19 @@ def scan_opportunities(
             "max_yes_price": max_yes_price,
             "simulations": simulations,
             "vol_window": vol_window,
+            "vol_model": vol_model,
+            "iv_timeout": iv_timeout,
+            "iv_source": "deribit-atm-iv",
             "orderbook": orderbook,
             "book_limit": book_limit,
             "book_source": book_source,
             "executable_notional": executable_notional,
             "book_timeout": book_timeout,
+            "max_book_age_seconds": max_book_age_seconds,
+            "max_spread": max_spread,
+            "realtime_spot": realtime_spot,
+            "require_realtime_spot": require_realtime_spot,
+            "spot_timeout": spot_timeout,
         },
         "contexts": {asset: context for asset, context in contexts.items() if context},
         "summary": {
@@ -375,6 +622,11 @@ def scan_opportunities(
             "best_net_edge": top[0]["net_edge"] if top else None,
             "best_roi": top[0]["roi"] if top else None,
             "orderbook_priced": sum(1 for row in opportunities if row.get("pricing_source") == "orderbook"),
+            "stale_orderbooks": sum(1 for row in opportunities if row.get("pricing_source") == "orderbook" and not row.get("orderbook_is_fresh")),
+            "partial_fills": sum(1 for row in opportunities if row.get("pricing_source") == "orderbook" and row.get("complete_fill") is False),
+            "wide_spreads": sum(1 for row in opportunities if row.get("spread") is not None and float(row["spread"]) > max_spread),
+            "live_spot_assets": sum(1 for context in contexts.values() if context and context.get("spot_is_realtime")),
+            "iv_assets": sum(1 for context in contexts.values() if context and context.get("iv_source")),
         },
         "opportunities": top,
     }
@@ -388,10 +640,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-liquidity", type=float, default=500.0)
     parser.add_argument("--simulations", type=int, default=1_500)
     parser.add_argument("--vol-window", choices=("30d", "90d", "180d"), default="90d")
+    parser.add_argument("--vol-model", choices=("factor", "rv"), default="factor")
+    parser.add_argument("--iv-timeout", type=int, default=3)
     parser.add_argument("--orderbook", action="store_true", help="Price top results from live YES order books")
     parser.add_argument("--book-limit", type=int, default=30)
     parser.add_argument("--executable-notional", type=float, default=100.0)
     parser.add_argument("--book-timeout", type=int, default=4)
+    parser.add_argument("--max-book-age-seconds", type=int, default=120)
+    parser.add_argument("--max-spread", type=float, default=0.04)
+    parser.add_argument("--daily-spot", action="store_true", help="Use latest daily close instead of live spot ticker")
+    parser.add_argument("--allow-daily-spot", action="store_true", help="Do not block candidates when live spot is unavailable")
     return parser.parse_args()
 
 
@@ -405,10 +663,16 @@ def main() -> int:
             min_liquidity=args.min_liquidity,
             simulations=args.simulations,
             vol_window=args.vol_window,
+            vol_model=args.vol_model,
+            iv_timeout=args.iv_timeout,
             orderbook=args.orderbook,
             book_limit=args.book_limit,
             executable_notional=args.executable_notional,
             book_timeout=args.book_timeout,
+            max_book_age_seconds=args.max_book_age_seconds,
+            max_spread=args.max_spread,
+            realtime_spot=not args.daily_spot,
+            require_realtime_spot=not args.allow_daily_spot,
         )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
