@@ -6,7 +6,9 @@ const els = {
   edgeChart: document.getElementById("edgeChart"),
   fetchPricesBtn: document.getElementById("fetchPricesBtn"),
   fetchMarketsBtn: document.getElementById("fetchMarketsBtn"),
+  sendReportBtn: document.getElementById("sendReportBtn"),
   dataQualityRows: document.getElementById("dataQualityRows"),
+  candleAnomalyRows: document.getElementById("candleAnomalyRows"),
   coverageRows: document.getElementById("coverageRows"),
   automationMeta: document.getElementById("automationMeta"),
   automationStatus: document.getElementById("automationStatus"),
@@ -34,6 +36,14 @@ const els = {
   paperExposure: document.getElementById("paperExposure"),
   paperRows: document.getElementById("paperRows"),
   refreshPaperBtn: document.getElementById("refreshPaperBtn"),
+  candidateReviewMeta: document.getElementById("candidateReviewMeta"),
+  candidateReviewTracked: document.getElementById("candidateReviewTracked"),
+  candidateReviewResolved: document.getElementById("candidateReviewResolved"),
+  candidateReviewWinRate: document.getElementById("candidateReviewWinRate"),
+  candidateReviewPnl: document.getElementById("candidateReviewPnl"),
+  candidateReviewRoi: document.getElementById("candidateReviewRoi"),
+  candidateReviewRows: document.getElementById("candidateReviewRows"),
+  refreshCandidateReviewBtn: document.getElementById("refreshCandidateReviewBtn"),
   scanBtn: document.getElementById("scanBtn"),
   scannerRows: document.getElementById("scannerRows"),
   scannerMeta: document.getElementById("scannerMeta"),
@@ -76,6 +86,21 @@ function percent(value) {
 function money(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+async function apiJson(url, options) {
+  const response = await fetch(url, options);
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (error) {
+    if (response.ok) return {};
+    throw new Error(`api ${response.status}`);
+  }
+  if (!response.ok) {
+    throw new Error(data?.error || `api ${response.status}`);
+  }
+  return data;
 }
 
 function signedPercent(value) {
@@ -142,7 +167,7 @@ function modelCell(row) {
   const source = row.annual_vol_source || "rv";
   const vol = Number.isFinite(Number(row.annual_vol)) ? percent(row.annual_vol) : "--";
   const iv = row.vol_components?.iv ? ` · IV ${percent(row.vol_components.iv)}` : "";
-  return `${percent(row.model_probability)}<small>${source} · vol ${vol}${iv}</small>`;
+  return `${percent(row.model_probability)}<small>${escapeHtml(source)} · vol ${vol}${iv}</small>`;
 }
 
 function scannerRowsForAsset(asset) {
@@ -349,7 +374,7 @@ function renderCoverage(candleRows, marketRows = [], priceHistoryRows = []) {
     .map(
       (row) => `
         <div class="coverage-row">
-          <strong><span>${row.asset} / ${row.source}</span><span>${row.candles} 根</span></strong>
+          <strong><span>${escapeHtml(row.asset)} / ${escapeHtml(row.source)}</span><span>${row.candles} 根</span></strong>
           <span>${new Date(row.first_ts).toLocaleDateString()} 至 ${new Date(row.last_ts).toLocaleDateString()}</span>
           <span>latest close ${money(row.latest_close)} · ${row.interval}</span>
         </div>
@@ -360,8 +385,8 @@ function renderCoverage(candleRows, marketRows = [], priceHistoryRows = []) {
     .map(
       (row) => `
         <div class="coverage-row">
-          <strong><span>${row.asset} markets</span><span>${row.markets} 个</span></strong>
-          <span>${row.direction} · ${row.source}</span>
+          <strong><span>${escapeHtml(row.asset)} markets</span><span>${row.markets} 个</span></strong>
+          <span>${escapeHtml(row.direction)} · ${escapeHtml(row.source)}</span>
           <span>scanner 候选池</span>
         </div>
       `,
@@ -371,8 +396,8 @@ function renderCoverage(candleRows, marketRows = [], priceHistoryRows = []) {
     .map(
       (row) => `
         <div class="coverage-row">
-          <strong><span>${row.outcome} price history</span><span>${row.prices} 点</span></strong>
-          <span>${row.source}</span>
+          <strong><span>${escapeHtml(row.outcome)} price history</span><span>${row.prices} 点</span></strong>
+          <span>${escapeHtml(row.source)}</span>
           <span>${new Date(row.first_ts * 1000).toLocaleDateString()} 至 ${new Date(row.last_ts * 1000).toLocaleDateString()}</span>
         </div>
       `,
@@ -422,6 +447,40 @@ function renderDataQuality(data = {}) {
     `)
     .join("");
   els.dataQualityRows.innerHTML = recommendedRows + sourceRows;
+}
+
+function anomalyReviewLabel(row) {
+  if (row.review_status === "reviewed") {
+    return `<span class="source-status source-ok">已复核</span>`;
+  }
+  if (row.review_status === "excluded") {
+    return `<span class="source-status source-bad">剔除</span>`;
+  }
+  return `<span class="source-status source-warn">待复核</span>`;
+}
+
+function renderCandleAnomalies(data = {}) {
+  if (!els.candleAnomalyRows) return;
+  const rows = data.anomalies || [];
+  if (!rows.length) {
+    els.candleAnomalyRows.innerHTML = `<div class="anomaly-row clean"><strong>异常 K 线</strong><span>当前阈值下没有发现异常跳变。</span></div>`;
+    return;
+  }
+  els.candleAnomalyRows.innerHTML = rows
+    .slice(0, 8)
+    .map((row) => `
+      <div class="anomaly-row">
+        <strong>
+          <span>${escapeHtml(row.asset)} / ${escapeHtml(row.source)}</span>
+          ${anomalyReviewLabel(row)}
+        </strong>
+        <span>${signedPercent(row.move)} · ${escapeHtml(row.review_decision || "未决策")}</span>
+        <span>${new Date(row.previous_ts).toLocaleDateString()} ${money(row.previous_close)} → ${new Date(row.ts).toLocaleDateString()} ${money(row.close)}</span>
+        <span>OHLC ${money(row.open)} / ${money(row.high)} / ${money(row.low)} / ${money(row.close)}</span>
+        <span>${escapeHtml(row.review_note || "")}</span>
+      </div>
+    `)
+    .join("");
 }
 
 function renderObservationSummary(summary = {}) {
@@ -581,6 +640,36 @@ function renderPaperTrading(data = {}) {
     .join("");
 }
 
+function renderCandidateReview(data = {}) {
+  const summary = data.summary || {};
+  if (els.candidateReviewMeta) els.candidateReviewMeta.textContent = `生成 ${data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--"}`;
+  if (els.candidateReviewTracked) els.candidateReviewTracked.textContent = summary.tracked ?? "--";
+  if (els.candidateReviewResolved) els.candidateReviewResolved.textContent = summary.resolved ?? "--";
+  if (els.candidateReviewWinRate) els.candidateReviewWinRate.textContent = percent(summary.win_rate);
+  if (els.candidateReviewPnl) els.candidateReviewPnl.innerHTML = summary.pnl === null || summary.pnl === undefined ? "--" : `<span class="${Number(summary.pnl) >= 0 ? "positive" : "negative"}">${money(summary.pnl)}</span>`;
+  if (els.candidateReviewRoi) els.candidateReviewRoi.innerHTML = signedPercent(summary.roi);
+  if (!els.candidateReviewRows) return;
+  const rows = data.candidates || [];
+  if (!rows.length) {
+    els.candidateReviewRows.innerHTML = `<tr><td colspan="7">暂无 candidate 样本</td></tr>`;
+    return;
+  }
+  els.candidateReviewRows.innerHTML = rows
+    .slice(0, 30)
+    .map((row) => `
+      <tr>
+        <td>${paperStatusLabel(row.status)}<small>${new Date(row.created_at).toLocaleDateString()}</small></td>
+        <td>${escapeHtml(row.asset)}</td>
+        <td class="question">${escapeHtml(row.question)}</td>
+        <td>${percent(row.model_probability)}<small>market ${percent(row.market_yes_price)}</small></td>
+        <td>${signedPercent(row.net_edge)}<small>ROI ${signedPercent(row.roi)}</small></td>
+        <td>${escapeHtml(row.book_quality)}<small>${escapeHtml(row.pricing_source || "--")} · spread ${percent(row.spread)}</small></td>
+        <td>${money(row.pnl)}<small>${escapeHtml(row.evidence || "")}</small></td>
+      </tr>
+    `)
+    .join("");
+}
+
 function sortValue(row, field) {
   if (field === "action") {
     const order = { candidate: 0, verify: 1, watch: 2, avoid: 3 };
@@ -659,8 +748,8 @@ function renderScanner(data) {
         <tr>
           <td>${actionLabel(row.action)}</td>
           <td class="review-cell">${reviewCell(row)}</td>
-          <td>${row.asset}</td>
-          <td class="question">${row.question}</td>
+          <td>${escapeHtml(row.asset)}</td>
+          <td class="question">${escapeHtml(row.question)}</td>
           <td>${row.direction === "hit_below" ? "下破" : "上破"}</td>
           <td>${money(row.spot)}</td>
           <td>${money(row.barrier)}</td>
@@ -679,48 +768,49 @@ function renderScanner(data) {
 }
 
 async function loadDataSummary() {
-  const [summaryResponse, qualityResponse] = await Promise.all([
-    fetch("/api/data-summary"),
-    fetch("/api/data-quality"),
+  const [data, quality, anomalies] = await Promise.all([
+    apiJson("/api/data-summary"),
+    apiJson("/api/data-quality"),
+    apiJson("/api/candle-anomalies?threshold=0.25"),
   ]);
-  const data = await summaryResponse.json();
-  const quality = await qualityResponse.json();
   renderDataQuality(quality);
+  renderCandleAnomalies(anomalies);
   renderCoverage(data.candles || [], data.markets || [], data.priceHistory || []);
   renderObservationSummary(data.observations || {});
 }
 
 async function loadObservations() {
   if (!els.observationRows) return;
-  const response = await fetch("/api/scanner-observations?limit=25");
-  const data = await response.json();
+  const data = await apiJson("/api/scanner-observations?limit=25");
   renderObservations(data);
 }
 
 async function loadAutomationHealth() {
   if (!els.automationStatus) return;
-  const response = await fetch("/api/automation-health?max_age_minutes=150");
-  const data = await response.json();
+  const data = await apiJson("/api/automation-health?max_age_minutes=150");
   renderAutomationHealth(data);
 }
 
 async function loadQualityAnalysis() {
   if (!els.qualityRows) return;
-  const response = await fetch("/api/quality-analysis?limit=500&stake=100");
-  const data = await response.json();
+  const data = await apiJson("/api/quality-analysis?limit=500&stake=100");
   renderQualityAnalysis(data);
 }
 
 async function loadPaperTrading() {
   if (!els.paperRows) return;
-  const response = await fetch("/api/paper-trading?limit=100&stake=100");
-  const data = await response.json();
+  const data = await apiJson("/api/paper-trading?limit=100&stake=100");
   renderPaperTrading(data);
 }
 
+async function loadCandidateReview() {
+  if (!els.candidateReviewRows) return;
+  const data = await apiJson("/api/candidate-review?limit=150&stake=100");
+  renderCandidateReview(data);
+}
+
 async function loadCandles() {
-  const response = await fetch(`/api/candles?asset=${selectedAsset}&limit=365`);
-  const data = await response.json();
+  const data = await apiJson(`/api/candles?asset=${selectedAsset}&limit=365`);
   lastPrices = data.candles || [];
   drawPriceChart(lastPrices);
 }
@@ -729,13 +819,16 @@ async function fetchRealPrices() {
   els.fetchPricesBtn.disabled = true;
   els.statusText.textContent = "正在抓取真实价格";
   try {
-    const response = await fetch("/api/fetch-crypto-prices");
-    const data = await response.json();
+    const data = await apiJson("/api/fetch-crypto-prices");
     await loadDataSummary();
     await loadCandles();
     els.statusText.textContent = data.ok
-      ? `已抓取 ${data.candles} 根真实 K 线`
+      ? data.partial
+        ? `已更新 ${data.candles} 根真实 K 线，部分源失败`
+        : `已抓取 ${data.candles} 根真实 K 线`
       : `真实价格抓取失败，已保留本地缓存`;
+  } catch (error) {
+    els.statusText.textContent = `真实价格抓取失败，已保留本地缓存：${error.message}`;
   } finally {
     els.fetchPricesBtn.disabled = false;
   }
@@ -745,12 +838,13 @@ async function fetchRealMarkets() {
   els.fetchMarketsBtn.disabled = true;
   els.statusText.textContent = "正在抓取真实 Polymarket 市场";
   try {
-    const response = await fetch("/api/fetch-real-markets");
-    const data = await response.json();
+    const data = await apiJson("/api/fetch-real-markets");
     await loadDataSummary();
     els.statusText.textContent = data.ok
       ? `已抓取 ${data.markets} 个真实 barrier 市场`
       : `真实市场抓取失败：${(data.errors || []).join("; ") || "无可用数据"}`;
+  } catch (error) {
+    els.statusText.textContent = `真实市场抓取失败：${error.message}`;
   } finally {
     els.fetchMarketsBtn.disabled = false;
   }
@@ -762,16 +856,12 @@ async function loadScanner() {
   els.scannerMeta.textContent = "运行中";
   els.scannerRows.innerHTML = `<tr><td colspan="14">Scanner 正在计算盘口与模型概率...</td></tr>`;
   try {
-    const response = await fetch("/api/scanner?limit=50&edge=0.02&min_liquidity=500&simulations=800&vol_window=90d&vol_model=factor&iv_timeout=3&orderbook=1&book_limit=8&executable_notional=100&book_timeout=4&max_book_age_seconds=120&max_spread=0.04&spot=realtime&require_realtime_spot=1&spot_timeout=4");
-    if (!response.ok) {
-      throw new Error(`scanner api ${response.status}`);
-    }
-    const data = await response.json();
+    const data = await apiJson("/api/scanner?limit=50&edge=0.02&min_liquidity=500&simulations=800&vol_window=90d&vol_model=factor&iv_timeout=3&orderbook=1&book_limit=8&executable_notional=100&book_timeout=4&max_book_age_seconds=120&max_spread=0.04&spot=realtime&require_realtime_spot=1&spot_timeout=4");
     renderScanner(data);
     els.statusText.textContent = `Scanner 已更新：${data.summary?.candidates ?? 0} 个候选`;
   } catch (error) {
     els.scannerMeta.textContent = "失败";
-    els.scannerRows.innerHTML = `<tr><td colspan="14">Scanner API 请求失败：${error.message}</td></tr>`;
+    els.scannerRows.innerHTML = `<tr><td colspan="14">Scanner API 请求失败：${escapeHtml(error.message)}</td></tr>`;
     els.statusText.textContent = `Scanner 失败：${error.message}`;
   } finally {
     els.topScanBtn.disabled = false;
@@ -787,21 +877,38 @@ async function saveObservation() {
   els.saveObservationBtn.disabled = true;
   els.statusText.textContent = "正在保存本次 scanner 观测";
   try {
-    const response = await fetch("/api/scanner-observations", {
+    const data = await apiJson("/api/scanner-observations", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(lastScanner),
     });
-    const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || `save api ${response.status}`);
-    }
-    await Promise.all([loadObservations(), loadQualityAnalysis(), loadPaperTrading(), loadAutomationHealth(), loadLogs()]);
+    if (!data.ok) throw new Error(data.error || "save api failed");
+    await Promise.all([loadObservations(), loadQualityAnalysis(), loadPaperTrading(), loadCandidateReview(), loadAutomationHealth(), loadLogs()]);
     els.statusText.textContent = `已保存观测 run #${data.run_id}`;
   } catch (error) {
     els.statusText.textContent = `保存观测失败：${error.message}`;
   } finally {
     els.saveObservationBtn.disabled = false;
+  }
+}
+
+async function sendReport() {
+  if (!els.sendReportBtn) return;
+  els.sendReportBtn.disabled = true;
+  els.statusText.textContent = "正在发送飞书报告";
+  try {
+    const data = await apiJson("/api/send-report", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ channel: "feishu" }),
+    });
+    els.statusText.textContent = data.ok ? "飞书报告已发送" : "飞书报告发送失败";
+    await loadLogs();
+  } catch (error) {
+    els.statusText.textContent = `飞书报告发送失败：${error.message}`;
+    await loadLogs();
+  } finally {
+    els.sendReportBtn.disabled = false;
   }
 }
 
@@ -812,11 +919,10 @@ async function loadLogs() {
   if (level) url += `&level=${encodeURIComponent(level)}`;
   if (module) url += `&module=${encodeURIComponent(module)}`;
   try {
-    const response = await fetch(url);
-    const data = await response.json();
+    const data = await apiJson(url);
     renderLogs(data.logs || [], data.total || 0);
   } catch (error) {
-    if (els.logList) els.logList.innerHTML = `<div class="log-empty">日志加载失败：${error.message}</div>`;
+    if (els.logList) els.logList.innerHTML = `<div class="log-empty">日志加载失败：${escapeHtml(error.message)}</div>`;
   }
 }
 
@@ -834,19 +940,19 @@ function renderLogs(logs, total) {
     if (lvl === "INFO") return "log-info";
     return "log-debug";
   };
-  const levelIcon = (lvl) => {
-    if (lvl === "ERROR") return "❌";
-    if (lvl === "WARN") return "⚠️";
-    if (lvl === "INFO") return "ℹ️";
-    return "🐛";
+  const levelLabel = (lvl) => {
+    if (lvl === "ERROR") return "ERROR";
+    if (lvl === "WARN") return "WARN";
+    if (lvl === "INFO") return "INFO";
+    return escapeHtml(lvl || "DEBUG");
   };
   els.logList.innerHTML = logs.map((log) => {
     const dt = new Date(log.created_at).toLocaleString("zh-CN");
     return `
       <div class="log-row ${levelClass(log.level)}">
         <span class="log-time">${dt}</span>
-        <span class="log-level">${levelIcon(log.level)} ${log.level}</span>
-        <span class="log-module">[${log.module}]</span>
+        <span class="log-level">${levelLabel(log.level)}</span>
+        <span class="log-module">[${escapeHtml(log.module)}]</span>
         <span class="log-message">${escapeHtml(log.message)}</span>
       </div>
     `;
@@ -869,8 +975,7 @@ function toggleLogPanel(show) {
 async function clearLogs() {
   if (!confirm("确定要清空日志吗？保留最近 1000 条。")) return;
   try {
-    const response = await fetch("/api/logs/clear", { method: "POST" });
-    const data = await response.json();
+    const data = await apiJson("/api/logs/clear", { method: "POST" });
     els.statusText.textContent = data.ok ? `已清理日志，剩余 ${data.remaining} 条` : "清理失败";
     await loadLogs();
   } catch (error) {
@@ -880,7 +985,7 @@ async function clearLogs() {
 
 async function loadDashboard() {
   els.statusText.textContent = "读取本地数据库";
-  await Promise.all([
+  const results = await Promise.allSettled([
     loadDataSummary(),
     loadCandles(),
     loadScanner(),
@@ -888,8 +993,13 @@ async function loadDashboard() {
     loadAutomationHealth(),
     loadQualityAnalysis(),
     loadPaperTrading(),
+    loadCandidateReview(),
     loadLogs(),
   ]);
+  const failed = results.filter((result) => result.status === "rejected");
+  if (failed.length) {
+    els.statusText.textContent = `刷新完成，${failed.length} 个模块失败`;
+  }
 }
 
 els.refreshBtn.addEventListener("click", loadDashboard);
@@ -904,6 +1014,8 @@ if (els.saveObservationBtn) els.saveObservationBtn.addEventListener("click", sav
 if (els.refreshHealthBtn) els.refreshHealthBtn.addEventListener("click", loadAutomationHealth);
 if (els.refreshQualityBtn) els.refreshQualityBtn.addEventListener("click", loadQualityAnalysis);
 if (els.refreshPaperBtn) els.refreshPaperBtn.addEventListener("click", loadPaperTrading);
+if (els.refreshCandidateReviewBtn) els.refreshCandidateReviewBtn.addEventListener("click", loadCandidateReview);
+if (els.sendReportBtn) els.sendReportBtn.addEventListener("click", sendReport);
 if (els.logBtn) els.logBtn.addEventListener("click", () => toggleLogPanel(true));
 if (els.logPanelClose) els.logPanelClose.addEventListener("click", () => toggleLogPanel(false));
 if (els.logPanel) els.logPanel.addEventListener("click", (e) => { if (e.target === els.logPanel) toggleLogPanel(false); });

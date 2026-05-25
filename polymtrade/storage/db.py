@@ -54,6 +54,18 @@ create table if not exists crypto_candles (
   primary key(asset, ts, source, interval)
 );
 
+create table if not exists candle_anomaly_reviews (
+  asset text not null,
+  source text not null,
+  interval text not null,
+  ts text not null,
+  status text not null,
+  decision text not null,
+  note text,
+  reviewed_at text not null,
+  primary key(asset, source, interval, ts)
+);
+
 create table if not exists barrier_markets (
   market_id text primary key,
   question text not null,
@@ -155,6 +167,7 @@ create index if not exists idx_system_logs_module on system_logs(module);
 create index if not exists idx_automation_source_health_created_at on automation_source_health(created_at desc);
 create index if not exists idx_automation_source_health_run_log_id on automation_source_health(run_log_id);
 create index if not exists idx_automation_source_health_source on automation_source_health(source);
+create index if not exists idx_candle_anomaly_reviews_reviewed_at on candle_anomaly_reviews(reviewed_at desc);
 create index if not exists idx_scanner_observations_run_id on scanner_observations(run_id);
 create index if not exists idx_scanner_observations_market_id on scanner_observations(market_id);
 create index if not exists idx_scanner_observations_action on scanner_observations(action);
@@ -324,28 +337,32 @@ def candles_for_asset(
     source: str | None = None,
     limit: int = 365,
 ) -> list[dict[str, Any]]:
+    asset = asset.upper()
     if source is None:
-        row = conn.execute(
-            """
-            select source
-            from crypto_candles
-            where asset = ?
-            group by source
-            order by case source
-                       when 'binance-data-api' then 0
-                       when 'binance' then 1
-                       when 'okx' then 2
-                       when 'coinbase' then 3
-                       else 5
-                     end,
-                     count(*) desc
-            limit 1
-            """,
-            (asset.upper(),),
-        ).fetchone()
-        source = row["source"] if row else None
+        recommended = (data_quality_report(conn).get("recommendations") or {}).get(asset) or {}
+        source = recommended.get("source")
+        if not source:
+            row = conn.execute(
+                """
+                select source
+                from crypto_candles
+                where asset = ?
+                group by source
+                order by case source
+                           when 'binance' then 0
+                           when 'binance-data-api' then 1
+                           when 'okx' then 2
+                           when 'coinbase' then 3
+                           else 5
+                         end,
+                         count(*) desc
+                limit 1
+                """,
+                (asset,),
+            ).fetchone()
+            source = row["source"] if row else None
     source_clause = "and source = ?" if source else ""
-    params: list[Any] = [asset.upper()]
+    params: list[Any] = [asset]
     if source:
         params.append(source)
     params.append(limit)
@@ -505,6 +522,115 @@ def data_quality_report(conn: sqlite3.Connection) -> dict[str, Any]:
         "status": overall_status,
         "sources": sorted(sources, key=lambda row: (row["asset"], row["priority"], row["source"])),
         "recommendations": recommendations,
+    }
+
+
+def upsert_candle_anomaly_review(
+    conn: sqlite3.Connection,
+    *,
+    asset: str,
+    source: str,
+    interval: str,
+    ts: str,
+    status: str,
+    decision: str,
+    note: str | None = None,
+    reviewed_at: str | None = None,
+) -> None:
+    reviewed_at = reviewed_at or datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        insert into candle_anomaly_reviews (
+          asset, source, interval, ts, status, decision, note, reviewed_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(asset, source, interval, ts) do update set
+          status = excluded.status,
+          decision = excluded.decision,
+          note = excluded.note,
+          reviewed_at = excluded.reviewed_at
+        """,
+        (asset.upper(), source, interval, ts, status, decision, note, reviewed_at),
+    )
+    conn.commit()
+
+
+def _candle_anomaly_review_map(conn: sqlite3.Connection) -> dict[tuple[str, str, str, str], dict[str, Any]]:
+    rows = conn.execute(
+        """
+        select asset, source, interval, ts, status, decision, note, reviewed_at
+        from candle_anomaly_reviews
+        """
+    ).fetchall()
+    return {
+        (row["asset"], row["source"], row["interval"], row["ts"]): {
+            "status": row["status"],
+            "decision": row["decision"],
+            "note": row["note"],
+            "reviewed_at": row["reviewed_at"],
+        }
+        for row in rows
+    }
+
+
+def candle_anomaly_report(conn: sqlite3.Connection, threshold: float = 0.25) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    reviews = _candle_anomaly_review_map(conn)
+    source_rows = conn.execute(
+        """
+        select asset, source, interval
+        from crypto_candles
+        group by asset, source, interval
+        order by asset, source, interval
+        """
+    ).fetchall()
+    anomalies: list[dict[str, Any]] = []
+    for source_row in source_rows:
+        rows = conn.execute(
+            """
+            select ts, open, high, low, close
+            from crypto_candles
+            where asset = ? and source = ? and interval = ?
+            order by ts asc
+            """,
+            (source_row["asset"], source_row["source"], source_row["interval"]),
+        ).fetchall()
+        previous = None
+        for row in rows:
+            close = float(row["close"])
+            if previous and previous["close"] > 0:
+                move = (close / previous["close"]) - 1.0
+                if abs(move) >= threshold:
+                    key = (source_row["asset"], source_row["source"], source_row["interval"], row["ts"])
+                    review = reviews.get(key, {})
+                    anomalies.append(
+                        {
+                            "asset": source_row["asset"],
+                            "source": source_row["source"],
+                            "interval": source_row["interval"],
+                            "ts": row["ts"],
+                            "previous_ts": previous["ts"],
+                            "previous_close": previous["close"],
+                            "close": close,
+                            "move": move,
+                            "open": row["open"],
+                            "high": row["high"],
+                            "low": row["low"],
+                            "review_status": review.get("status", "unreviewed"),
+                            "review_decision": review.get("decision"),
+                            "review_note": review.get("note"),
+                            "reviewed_at": review.get("reviewed_at"),
+                        }
+                    )
+            previous = {"ts": row["ts"], "close": close}
+    anomalies.sort(key=lambda row: (abs(float(row["move"])), row["ts"]), reverse=True)
+    reviewed = sum(1 for row in anomalies if row.get("review_status") != "unreviewed")
+    return {
+        "generated_at": now.isoformat(),
+        "threshold": threshold,
+        "count": len(anomalies),
+        "reviewed": reviewed,
+        "unreviewed": len(anomalies) - reviewed,
+        "anomalies": anomalies,
     }
 
 
@@ -820,6 +946,7 @@ def automation_source_health_summary(conn: sqlite3.Connection, recent_runs: int 
                 "healthy": 0,
                 "degraded": 0,
                 "error": 0,
+                "network_unavailable": 0,
                 "skipped": 0,
                 "records": 0,
                 "errors": 0,
@@ -832,6 +959,9 @@ def automation_source_health_summary(conn: sqlite3.Connection, recent_runs: int 
         bucket["checks"] += 1
         if status in {"healthy", "degraded", "error", "skipped"}:
             bucket[status] += 1
+        elif status == "network_unavailable":
+            bucket["network_unavailable"] += 1
+            bucket["error"] += 1
         bucket["records"] += int(item.get("records") or 0)
         bucket["errors"] += int(item.get("errors") or 0)
 

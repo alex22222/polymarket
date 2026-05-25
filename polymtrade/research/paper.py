@@ -309,3 +309,67 @@ def candidate_quality_report(
         "groups": grouped,
         "recent": recent[:20],
     }
+
+
+def candidate_review_report(
+    conn,
+    limit: int = 100,
+    stake: float = 100.0,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    now = now or datetime.now(timezone.utc)
+    rows = _candidate_rows(conn, limit)
+    reviewed: list[dict[str, Any]] = []
+    for row in rows:
+        raw = _raw_json(row)
+        trade = _paper_trade(conn, row, now=now, default_stake=stake)
+        reviewed.append(
+            {
+                "observation_id": row["id"],
+                "run_id": row["run_id"],
+                "created_at": row["created_at"],
+                "asset": row["asset"],
+                "question": row["question"],
+                "status": trade["status"],
+                "hit": trade["hit"],
+                "evidence": trade["evidence"],
+                "pnl": trade["pnl"],
+                "return_pct": trade["return_pct"],
+                "stake": trade["stake"],
+                "spot": row["spot"],
+                "barrier": row["barrier"],
+                "direction": row["direction"],
+                "end_date": trade["end_date"],
+                "market_yes_price": row["market_yes_price"],
+                "model_probability": row["model_probability"],
+                "net_edge": row["net_edge"],
+                "roi": row["roi"],
+                "pricing_source": row["pricing_source"],
+                "spread": row["spread"],
+                "orderbook_age_seconds": row["orderbook_age_seconds"],
+                "complete_fill": row["complete_fill"],
+                "liquidity": row["liquidity"],
+                "vol_source": raw.get("annual_vol_source") or "unknown",
+                "book_quality": _book_quality(raw),
+            }
+        )
+
+    resolved = [row for row in reviewed if row["status"] in {"won", "lost"}]
+    open_rows = [row for row in reviewed if row["status"] == "open"]
+    won = sum(1 for row in resolved if row["status"] == "won")
+    pnl = sum(float(row["pnl"] or 0.0) for row in resolved)
+    stake_resolved = sum(float(row["stake"] or 0.0) for row in resolved)
+    return {
+        "generated_at": now.isoformat(),
+        "summary": {
+            "tracked": len(reviewed),
+            "resolved": len(resolved),
+            "open": len(open_rows),
+            "won": won,
+            "lost": len(resolved) - won,
+            "win_rate": won / len(resolved) if resolved else None,
+            "pnl": pnl,
+            "roi": pnl / stake_resolved if stake_resolved else None,
+        },
+        "candidates": reviewed,
+    }

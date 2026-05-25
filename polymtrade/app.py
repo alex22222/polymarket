@@ -13,10 +13,12 @@ from polymtrade.data.polymarket_api import (
     search_polymtrade_barrier_markets,
 )
 from polymtrade.research.scanner import scan_opportunities
-from polymtrade.research.paper import candidate_quality_report, paper_trading_report
+from polymtrade.research.paper import candidate_quality_report, candidate_review_report, paper_trading_report
+from polymtrade.reporting.feishu import FeishuConfigError, build_research_report, send_feishu_report
 from polymtrade.storage.db import (
     automation_health,
     barrier_market_summary,
+    candle_anomaly_report,
     candle_summary,
     candles_for_asset,
     connect,
@@ -29,6 +31,7 @@ from polymtrade.storage.db import (
     latest_scanner_observation_runs,
     latest_scanner_observations,
     scanner_observation_summary,
+    upsert_candle_anomaly_review,
     upsert_candles,
     upsert_barrier_markets,
 )
@@ -85,9 +88,70 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.log_event("ERROR", "scanner", f"Observation save failed: {exc}")
                 self.send_json({"ok": False, "error": str(exc)}, status=400)
             return
+        if path == "/api/candle-anomaly-review":
+            try:
+                length = int(self.headers.get("content-length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                required = ("asset", "source", "interval", "ts", "status", "decision")
+                missing = [key for key in required if not payload.get(key)]
+                if missing:
+                    raise ValueError(f"missing fields: {', '.join(missing)}")
+                with connect(DB_PATH) as conn:
+                    upsert_candle_anomaly_review(
+                        conn,
+                        asset=str(payload["asset"]),
+                        source=str(payload["source"]),
+                        interval=str(payload["interval"]),
+                        ts=str(payload["ts"]),
+                        status=str(payload["status"]),
+                        decision=str(payload["decision"]),
+                        note=str(payload.get("note") or ""),
+                    )
+                    report = candle_anomaly_report(conn, threshold=float(payload.get("threshold") or 0.25))
+                self.log_event("INFO", "data", f"Candle anomaly reviewed: {payload['asset']} {payload['ts']}")
+                self.send_json({"ok": True, "report": report})
+            except Exception as exc:
+                self.log_event("ERROR", "data", f"Candle anomaly review failed: {exc}")
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        if path == "/api/send-report":
+            try:
+                length = int(self.headers.get("content-length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                channel = str(payload.get("channel") or "feishu")
+                if channel != "feishu":
+                    raise ValueError(f"unsupported report channel: {channel}")
+                with connect(DB_PATH) as conn:
+                    report = build_research_report(conn)
+                result = send_feishu_report(report)
+                self.log_event("INFO", "report", f"Report sent via Feishu: status={result.get('status')}")
+                self.send_json({"ok": True, "channel": "feishu", "result": result, "preview": report[:500]})
+            except FeishuConfigError as exc:
+                self.log_event("WARN", "report", f"Feishu report not configured: {exc}")
+                self.send_json(
+                    {
+                        "ok": False,
+                        "error": "missing Feishu configuration",
+                        "hint": "Set FEISHU_WEBHOOK_URL, or set FEISHU_APP_ID, FEISHU_APP_SECRET, and FEISHU_RECEIVE_ID before starting the server.",
+                    },
+                    status=400,
+                )
+            except Exception as exc:
+                self.log_event("ERROR", "report", f"Feishu report failed: {exc}")
+                self.send_json({"ok": False, "error": str(exc)}, status=502)
+            return
         self.send_json({"ok": False, "error": "POST not supported for this path"}, status=405)
 
     def do_GET(self) -> None:
+        try:
+            self.handle_get()
+        except (TypeError, ValueError) as exc:
+            self.send_json({"ok": False, "error": f"bad request: {exc}"}, status=400)
+        except Exception as exc:
+            self.log_event("ERROR", "system", f"GET {self.path} failed: {exc}")
+            self.send_json({"ok": False, "error": str(exc)}, status=500)
+
+    def handle_get(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
@@ -118,6 +182,15 @@ class AppHandler(SimpleHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 self.send_json(data_quality_report(conn))
             return
+        if path == "/api/candle-anomalies":
+            threshold = float(query.get("threshold", ["0.25"])[0])
+            with connect(DB_PATH) as conn:
+                self.send_json(candle_anomaly_report(conn, threshold=threshold))
+            return
+        if path == "/api/report-preview":
+            with connect(DB_PATH) as conn:
+                self.send_json({"ok": True, "channel": "feishu", "text": build_research_report(conn)})
+            return
         if path == "/api/scanner-observations":
             limit = int(query.get("limit", ["25"])[0])
             with connect(DB_PATH) as conn:
@@ -134,6 +207,12 @@ class AppHandler(SimpleHTTPRequestHandler):
             stake = float(query.get("stake", ["100"])[0])
             with connect(DB_PATH) as conn:
                 self.send_json(paper_trading_report(conn, limit=limit, stake=stake))
+            return
+        if path == "/api/candidate-review":
+            limit = int(query.get("limit", ["100"])[0])
+            stake = float(query.get("stake", ["100"])[0])
+            with connect(DB_PATH) as conn:
+                self.send_json(candidate_review_report(conn, limit=limit, stake=stake))
             return
         if path == "/api/quality-analysis":
             limit = int(query.get("limit", ["500"])[0])
@@ -216,7 +295,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                     self.log_event("INFO", "data", f"Price fetch OK: {inserted} candles inserted")
                 self.send_json(
                     {
-                        "ok": not errors,
+                        "ok": bool(candles),
+                        "partial": bool(errors),
                         "source": "binance",
                         "candles": inserted,
                         "errors": errors,

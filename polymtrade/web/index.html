@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Polymtrade Research</title>
-    <link rel="stylesheet" href="/styles.css?v=12" />
+    <link rel="stylesheet" href="/styles.css?v=13" />
   </head>
   <body>
     <main class="shell">
@@ -18,6 +18,7 @@
           <button id="logBtn" class="secondary-btn">
             系统日志 <span id="logBadge" class="log-badge">0</span>
           </button>
+          <button id="sendReportBtn" class="secondary-btn">发送飞书报告</button>
           <button id="topScanBtn" class="primary-btn">运行 Scanner</button>
         </div>
       </header>
@@ -87,6 +88,9 @@
         </div>
         <div id="dataQualityRows" class="data-quality-rows">
           <div class="data-quality-row"><strong>等待数据质量检查</strong><span>检查 BTC / ETH 历史 K 线覆盖、缺口、新鲜度和异常跳变。</span></div>
+        </div>
+        <div id="candleAnomalyRows" class="anomaly-rows">
+          <div class="anomaly-row"><strong>等待异常 K 线复核</strong><span>列出超过阈值的日线跳变，决定是否剔除或修正长历史源。</span></div>
         </div>
         <div id="coverageRows" class="coverage-rows coverage-grid"></div>
       </section>
@@ -177,6 +181,39 @@
         </div>
       </section>
 
+      <section class="candidate-review-section view-section hidden" data-view="research">
+        <div class="section-head">
+          <h2>候选复盘</h2>
+          <div class="actions compact">
+            <span id="candidateReviewMeta">等待候选样本</span>
+            <button id="refreshCandidateReviewBtn" class="secondary-btn">刷新复盘</button>
+          </div>
+        </div>
+        <div class="paper-summary">
+          <article><span>候选</span><strong id="candidateReviewTracked">--</strong></article>
+          <article><span>已结算</span><strong id="candidateReviewResolved">--</strong></article>
+          <article><span>胜率</span><strong id="candidateReviewWinRate">--</strong></article>
+          <article><span>PnL</span><strong id="candidateReviewPnl">--</strong></article>
+          <article><span>ROI</span><strong id="candidateReviewRoi">--</strong></article>
+        </div>
+        <div class="table-wrap">
+          <table class="candidate-review-table">
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>资产</th>
+                <th>市场</th>
+                <th>模型 / 市场</th>
+                <th>Edge / ROI</th>
+                <th>盘口</th>
+                <th>结果</th>
+              </tr>
+            </thead>
+            <tbody id="candidateReviewRows"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="scanner-section view-section hidden" data-view="scanner">
         <div class="section-head">
           <h2>Scanner</h2>
@@ -251,6 +288,7 @@
                 <option value="system">system</option>
                 <option value="scanner">scanner</option>
                 <option value="data">data</option>
+                <option value="report">report</option>
               </select>
               <button id="refreshLogsBtn" class="secondary-btn" title="刷新日志">↻</button>
               <button id="clearLogsBtn" class="secondary-btn danger" title="清空旧日志">清空</button>
@@ -266,6 +304,6 @@
 
       <p id="statusText" class="status-line">读取本地数据库</p>
     </main>
-    <script src="/app.js?v=21"></script>
+    <script src="/app.js?v=26"></script>
   </body>
 </html>
