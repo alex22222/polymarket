@@ -14,7 +14,12 @@ from polymtrade.data.polymarket_api import (
     search_polymtrade_barrier_markets,
 )
 from polymtrade.research.scanner import scan_opportunities
-from polymtrade.research.paper import candidate_quality_report, candidate_review_report, paper_trading_report
+from polymtrade.research.paper import (
+    candidate_quality_report,
+    candidate_review_report,
+    paper_trading_report,
+    position_management_report,
+)
 from polymtrade.reporting.feishu import FeishuConfigError, build_research_report, send_feishu_report
 from polymtrade.storage.db import (
     automation_health,
@@ -251,6 +256,22 @@ class AppHandler(SimpleHTTPRequestHandler):
             stake = float(query.get("stake", ["100"])[0])
             with connect(DB_PATH) as conn:
                 self.send_json(candidate_review_report(conn, limit=limit, stake=stake))
+            return
+        if path == "/api/position-management":
+            limit = int(query.get("limit", ["100"])[0])
+            stake = float(query.get("stake", ["100"])[0])
+            book_timeout = int(query.get("book_timeout", ["4"])[0])
+            max_book_age = int(query.get("max_book_age_seconds", ["120"])[0])
+            with connect(DB_PATH) as conn:
+                self.send_json(
+                    position_management_report(
+                        conn,
+                        limit=limit,
+                        stake=stake,
+                        book_timeout=book_timeout,
+                        max_book_age_seconds=max_book_age,
+                    )
+                )
             return
         if path == "/api/quality-analysis":
             limit = int(query.get("limit", ["500"])[0])

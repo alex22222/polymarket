@@ -37,6 +37,14 @@ const els = {
   paperExposure: document.getElementById("paperExposure"),
   paperRows: document.getElementById("paperRows"),
   refreshPaperBtn: document.getElementById("refreshPaperBtn"),
+  positionMeta: document.getElementById("positionMeta"),
+  positionCount: document.getElementById("positionCount"),
+  positionHold: document.getElementById("positionHold"),
+  positionReview: document.getElementById("positionReview"),
+  positionExit: document.getElementById("positionExit"),
+  positionPnl: document.getElementById("positionPnl"),
+  positionRows: document.getElementById("positionRows"),
+  refreshPositionsBtn: document.getElementById("refreshPositionsBtn"),
   candidateReviewMeta: document.getElementById("candidateReviewMeta"),
   candidateReviewTracked: document.getElementById("candidateReviewTracked"),
   candidateReviewResolved: document.getElementById("candidateReviewResolved"),
@@ -621,6 +629,35 @@ function paperStatusLabel(status) {
   return `<span class="pill warning-pill">未知</span>`;
 }
 
+function riskClass(level) {
+  if (level === "low") return "risk-low";
+  if (level === "medium") return "risk-medium";
+  if (level === "high") return "risk-high";
+  if (level === "extreme") return "risk-extreme";
+  return "risk-unknown";
+}
+
+function renderRiskPanel(risk = {}) {
+  const notes = Array.isArray(risk.notes) ? risk.notes.slice(0, 2) : [];
+  return `
+    <div class="risk-panel ${riskClass(risk.risk_level)}">
+      <div class="risk-panel-head">
+        <span>${escapeHtml(risk.risk_label || "未知风险")}</span>
+        <strong>最大亏损 ${percent(risk.max_loss_pct)}</strong>
+      </div>
+      <div class="risk-metrics">
+        <span>需要变动 <strong>${signedPercent(risk.required_move_pct)}</strong></span>
+        <span>剩余 <strong>${risk.days_remaining === null || risk.days_remaining === undefined ? "--" : `${Number(risk.days_remaining).toFixed(1)}d`}</strong></span>
+        <span>模型概率 <strong>${percent(risk.model_probability)}</strong></span>
+        <span>盈亏平衡 <strong>${percent(risk.breakeven_probability)}</strong></span>
+        <span>安全边际 <strong>${signedPercent(risk.safety_margin)}</strong></span>
+        <span>赢/输 <strong>${money(risk.profit_if_win)} / ${money(risk.loss_if_lose)}</strong></span>
+      </div>
+      ${notes.length ? `<p>${notes.map((item) => escapeHtml(item)).join(" ")}</p>` : ""}
+    </div>
+  `;
+}
+
 function renderPaperTrading(data = {}) {
   const summary = data.summary || {};
   const excluded = data.excluded || [];
@@ -652,7 +689,53 @@ function renderPaperTrading(data = {}) {
         </strong>
         <span>${escapeHtml(row.question)}</span>
         <span>${money(row.spot)} → ${money(row.barrier)} · ${row.direction === "hit_below" ? "下破" : "上破"} · 到期 ${row.end_date ? new Date(row.end_date).toLocaleDateString() : "--"}</span>
+        ${renderRiskPanel(row.risk || {})}
         <span>stake ${money(row.stake)} · PnL ${money(row.pnl)} · ${escapeHtml(row.evidence || "")}</span>
+      </div>
+    `)
+    .join("");
+}
+
+function recommendationPill(action, label) {
+  if (action === "hold") return `<span class="pill positive-pill">${escapeHtml(label || "继续持有")}</span>`;
+  if (action === "exit") return `<span class="pill negative-pill">${escapeHtml(label || "应退出")}</span>`;
+  return `<span class="pill warning-pill">${escapeHtml(label || "观察退出")}</span>`;
+}
+
+function renderPositions(data = {}) {
+  const summary = data.summary || {};
+  if (els.positionMeta) {
+    const generated = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--";
+    els.positionMeta.textContent = `只读退出观察 · 生成 ${generated}`;
+  }
+  if (els.positionCount) els.positionCount.textContent = summary.positions ?? "--";
+  if (els.positionHold) els.positionHold.textContent = summary.hold ?? "--";
+  if (els.positionReview) els.positionReview.textContent = summary.review ?? "--";
+  if (els.positionExit) els.positionExit.textContent = summary.exit ?? "--";
+  if (els.positionPnl) els.positionPnl.innerHTML = summary.unrealized_pnl === null || summary.unrealized_pnl === undefined ? "--" : `<span class="${Number(summary.unrealized_pnl) >= 0 ? "positive" : "negative"}">${money(summary.unrealized_pnl)}</span>`;
+  if (!els.positionRows) return;
+  const rows = data.positions || [];
+  if (!rows.length) {
+    els.positionRows.innerHTML = `<div class="coverage-row"><strong>暂无开放持仓</strong><span>当前有效 Paper Trade 出现后，这里会复核退出机会。</span></div>`;
+    return;
+  }
+  els.positionRows.innerHTML = rows
+    .map((row) => `
+      <div class="position-row">
+        <strong>
+          <span>${recommendationPill(row.recommendation, row.recommendation_label)} ${escapeHtml(row.asset)}</span>
+          <span>${signedPercent(row.unrealized_return)}</span>
+        </strong>
+        <span>${escapeHtml(row.question)}</span>
+        <div class="position-metrics">
+          <span>入场 <strong>${percent(row.entry_price)}</strong></span>
+          <span>卖出 bid <strong>${percent(row.current_best_bid)}</strong></span>
+          <span>买入 ask <strong>${percent(row.current_best_ask)}</strong></span>
+          <span>spread <strong>${percent(row.spread)}</strong></span>
+          <span>退出价值 <strong>${money(row.exit_value)}</strong></span>
+          <span>未实现 PnL <strong>${money(row.unrealized_pnl)}</strong></span>
+        </div>
+        <span>${escapeHtml((row.notes || []).join("；"))}</span>
       </div>
     `)
     .join("");
@@ -855,6 +938,30 @@ async function loadPaperTrading() {
   }
 }
 
+async function loadPositions() {
+  if (!els.positionRows) return;
+  if (els.refreshPositionsBtn) {
+    els.refreshPositionsBtn.disabled = true;
+    els.refreshPositionsBtn.textContent = "刷新中...";
+  }
+  if (els.positionMeta) els.positionMeta.textContent = "正在刷新持仓";
+  try {
+    const data = await apiJson("/api/position-management?limit=100&stake=100&book_timeout=4&max_book_age_seconds=120");
+    renderPositions(data);
+    const summary = data.summary || {};
+    els.statusText.textContent = `持仓管理已刷新：开放 ${summary.positions ?? 0} 条，观察退出 ${summary.review ?? 0} 条`;
+  } catch (error) {
+    if (els.positionMeta) els.positionMeta.textContent = "刷新失败";
+    els.statusText.textContent = `持仓管理刷新失败：${error.message}`;
+    throw error;
+  } finally {
+    if (els.refreshPositionsBtn) {
+      els.refreshPositionsBtn.disabled = false;
+      els.refreshPositionsBtn.textContent = "刷新持仓";
+    }
+  }
+}
+
 async function loadCandidateReview() {
   if (!els.candidateReviewRows) return;
   const data = await apiJson("/api/candidate-review?limit=150&stake=100");
@@ -935,7 +1042,7 @@ async function saveObservation() {
       body: JSON.stringify(lastScanner),
     });
     if (!data.ok) throw new Error(data.error || "save api failed");
-    await Promise.all([loadObservations(), loadQualityAnalysis(), loadPaperTrading(), loadCandidateReview(), loadAutomationHealth(), loadLogs()]);
+    await Promise.all([loadObservations(), loadQualityAnalysis(), loadPaperTrading(), loadPositions(), loadCandidateReview(), loadAutomationHealth(), loadLogs()]);
     els.statusText.textContent = `已保存观测 run #${data.run_id}`;
   } catch (error) {
     els.statusText.textContent = `保存观测失败：${error.message}`;
@@ -1054,6 +1161,7 @@ async function loadDashboard() {
     loadAutomationHealth(),
     loadQualityAnalysis(),
     loadPaperTrading(),
+    loadPositions(),
     loadCandidateReview(),
     loadLogs(),
     loadVersion(),
@@ -1076,6 +1184,7 @@ if (els.saveObservationBtn) els.saveObservationBtn.addEventListener("click", sav
 if (els.refreshHealthBtn) els.refreshHealthBtn.addEventListener("click", loadAutomationHealth);
 if (els.refreshQualityBtn) els.refreshQualityBtn.addEventListener("click", loadQualityAnalysis);
 if (els.refreshPaperBtn) els.refreshPaperBtn.addEventListener("click", loadPaperTrading);
+if (els.refreshPositionsBtn) els.refreshPositionsBtn.addEventListener("click", loadPositions);
 if (els.refreshCandidateReviewBtn) els.refreshCandidateReviewBtn.addEventListener("click", loadCandidateReview);
 if (els.sendReportBtn) els.sendReportBtn.addEventListener("click", sendReport);
 if (els.logBtn) els.logBtn.addEventListener("click", () => toggleLogPanel(true));

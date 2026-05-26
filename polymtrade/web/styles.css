@@ -614,7 +614,19 @@ canvas {
   gap: 10px;
 }
 
+.position-rows {
+  display: grid;
+  gap: 10px;
+}
+
 .paper-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfa;
+  padding: 12px;
+}
+
+.position-row {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfa;
@@ -629,11 +641,114 @@ canvas {
   margin-bottom: 7px;
 }
 
+.position-row strong {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+
 .paper-row > span {
   color: var(--muted);
   display: block;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.position-row > span {
+  color: var(--muted);
+  display: block;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.position-metrics {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  margin: 10px 0;
+}
+
+.position-metrics span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.position-metrics strong {
+  color: var(--ink);
+  display: block;
+  font-size: 14px;
+  margin-top: 3px;
+}
+
+.risk-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 10px 0;
+  padding: 10px;
+}
+
+.risk-panel-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.risk-panel-head span,
+.risk-panel-head strong {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.risk-metrics {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
+}
+
+.risk-metrics span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.risk-metrics strong {
+  color: var(--ink);
+  display: block;
+  font-size: 14px;
+  margin-top: 3px;
+}
+
+.risk-panel p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 8px 0 0;
+}
+
+.risk-low {
+  background: #eff8f1;
+  border-color: #cbe8d2;
+}
+
+.risk-medium {
+  background: #fff8e8;
+  border-color: #efd89d;
+}
+
+.risk-high,
+.risk-extreme {
+  background: #fff0f2;
+  border-color: #efc1c8;
+}
+
+.risk-high .risk-panel-head span,
+.risk-extreme .risk-panel-head span,
+.risk-high .risk-panel-head strong,
+.risk-extreme .risk-panel-head strong {
+  color: var(--red);
 }
 
 .scanner-summary {
@@ -836,6 +951,8 @@ td small {
   .observation-rows,
   .quality-summary,
   .paper-summary,
+  .position-metrics,
+  .risk-metrics,
   .scanner-summary {
     grid-template-columns: 1fr;
   }

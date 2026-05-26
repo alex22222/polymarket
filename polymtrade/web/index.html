@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Polymtrade Research</title>
-    <link rel="stylesheet" href="/styles.css?v=13" />
+    <link rel="stylesheet" href="/styles.css?v=15" />
   </head>
   <body>
     <main class="shell">
@@ -184,6 +184,26 @@
         </div>
       </section>
 
+      <section class="position-section view-section hidden" data-view="research">
+        <div class="section-head">
+          <h2>持仓管理</h2>
+          <div class="actions compact">
+            <span id="positionMeta">等待持仓复核</span>
+            <button id="refreshPositionsBtn" class="secondary-btn">刷新持仓</button>
+          </div>
+        </div>
+        <div class="paper-summary">
+          <article><span>开放持仓</span><strong id="positionCount">--</strong></article>
+          <article><span>继续持有</span><strong id="positionHold">--</strong></article>
+          <article><span>观察退出</span><strong id="positionReview">--</strong></article>
+          <article><span>应退出</span><strong id="positionExit">--</strong></article>
+          <article><span>未实现 PnL</span><strong id="positionPnl">--</strong></article>
+        </div>
+        <div id="positionRows" class="position-rows">
+          <div class="coverage-row"><strong>暂无开放持仓</strong><span>当前有效 Paper Trade 出现后，这里会复核退出机会。</span></div>
+        </div>
+      </section>
+
       <section class="candidate-review-section view-section hidden" data-view="research">
         <div class="section-head">
           <h2>候选复盘</h2>
@@ -307,6 +327,6 @@
 
       <p id="statusText" class="status-line">读取本地数据库</p>
     </main>
-    <script src="/app.js?v=31"></script>
+    <script src="/app.js?v=33"></script>
   </body>
 </html>
