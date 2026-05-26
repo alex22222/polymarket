@@ -623,9 +623,10 @@ function paperStatusLabel(status) {
 
 function renderPaperTrading(data = {}) {
   const summary = data.summary || {};
+  const excluded = data.excluded || [];
   if (els.paperMeta) {
     const generated = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--";
-    els.paperMeta.textContent = `${summary.tracked ?? 0} 条 · open ${summary.open ?? 0} · 生成 ${generated}`;
+    els.paperMeta.textContent = `当前有效 ${summary.tracked ?? 0} 条 · 旧样本 ${summary.excluded_legacy ?? 0}/${summary.raw_candidates ?? 0} · 生成 ${generated}`;
   }
   if (els.paperTracked) els.paperTracked.textContent = summary.tracked ?? "--";
   if (els.paperResolved) els.paperResolved.textContent = summary.resolved ?? "--";
@@ -635,7 +636,10 @@ function renderPaperTrading(data = {}) {
   if (!els.paperRows) return;
   const rows = data.trades || [];
   if (!rows.length) {
-    els.paperRows.innerHTML = `<div class="coverage-row"><strong>暂无候选观测</strong><span>保存 candidate 后，这里会跟踪是否触及 barrier。</span></div>`;
+    const legacyText = excluded.length
+      ? `已隔离 ${summary.excluded_legacy ?? excluded.length} 条旧规则/不可执行样本，最新原因：${escapeHtml(excluded[0].reasons?.join("；") || "legacy sample")}`
+      : "保存当前规则通过的 candidate 后，这里会跟踪是否触及 barrier。";
+    els.paperRows.innerHTML = `<div class="coverage-row"><strong>暂无当前有效 Paper Trade</strong><span>${legacyText}</span></div>`;
     return;
   }
   els.paperRows.innerHTML = rows
@@ -835,10 +839,10 @@ async function loadPaperTrading() {
   if (els.paperMeta) els.paperMeta.textContent = "正在刷新 paper trading";
   els.statusText.textContent = "正在刷新 Paper Trading 结果";
   try {
-    const data = await apiJson("/api/paper-trading?limit=100&stake=100");
+    const data = await apiJson("/api/paper-trading?limit=100&stake=100&current_only=1&max_days=14&max_spread=0.04&max_book_age_seconds=120");
     renderPaperTrading(data);
     const summary = data.summary || {};
-    els.statusText.textContent = `Paper Trading 已刷新：${summary.tracked ?? 0} 条，已结算 ${summary.resolved ?? 0} 条`;
+    els.statusText.textContent = `Paper Trading 已刷新：当前有效 ${summary.tracked ?? 0} 条，旧样本 ${summary.excluded_legacy ?? 0} 条`;
   } catch (error) {
     if (els.paperMeta) els.paperMeta.textContent = "刷新失败";
     els.statusText.textContent = `Paper Trading 刷新失败：${error.message}`;

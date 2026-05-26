@@ -6,6 +6,11 @@ from typing import Any
 
 from polymtrade.research.scanner import parse_datetime, preferred_price_source
 
+CURRENT_RULES_FROM = datetime(2026, 5, 26, tzinfo=timezone.utc)
+DEFAULT_MAX_DAYS_TO_EXPIRY = 14.0
+DEFAULT_MAX_SPREAD = 0.04
+DEFAULT_MAX_BOOK_AGE_SECONDS = 120.0
+
 
 def _observation_end_date(row: dict[str, Any]) -> datetime | None:
     try:
@@ -122,14 +127,126 @@ def _paper_trade(conn, row: dict[str, Any], now: datetime, default_stake: float)
     return result
 
 
+def _truthy(value: Any) -> bool:
+    return value in {True, 1, "1", "true", "True", "yes"}
+
+
+def _paper_row_reject_reasons(
+    row: dict[str, Any],
+    now: datetime,
+    *,
+    max_days_to_expiry: float,
+    max_spread: float,
+    max_book_age_seconds: float,
+    current_rules_from: datetime,
+) -> list[str]:
+    reasons: list[str] = []
+    observed_at = parse_datetime(row.get("created_at"))
+    end_at = _observation_end_date(row)
+    if not observed_at:
+        reasons.append("missing observation time")
+    elif observed_at < current_rules_from:
+        reasons.append(f"legacy rules before {current_rules_from.date().isoformat()}")
+    if not end_at:
+        reasons.append("missing end date")
+    elif end_at <= now:
+        reasons.append("already expired")
+    try:
+        days_to_expiry = float(row.get("days_to_expiry"))
+        if days_to_expiry > max_days_to_expiry:
+            reasons.append(f"horizon > {max_days_to_expiry:g}d")
+        if days_to_expiry <= 0:
+            reasons.append("expired at observation")
+    except (TypeError, ValueError):
+        reasons.append("missing days to expiry")
+    if row.get("pricing_source") != "orderbook":
+        reasons.append("not orderbook priced")
+    if not _truthy(row.get("complete_fill")):
+        reasons.append("incomplete executable fill")
+    try:
+        spread = row.get("spread")
+        if spread is None:
+            reasons.append("missing spread")
+        elif float(spread) > max_spread:
+            reasons.append(f"spread > {max_spread:.0%}")
+    except (TypeError, ValueError):
+        reasons.append("invalid spread")
+    try:
+        age = row.get("orderbook_age_seconds")
+        if age is None:
+            reasons.append("missing orderbook age")
+        elif float(age) > max_book_age_seconds:
+            reasons.append(f"orderbook age > {max_book_age_seconds:g}s")
+    except (TypeError, ValueError):
+        reasons.append("invalid orderbook age")
+    return reasons
+
+
+def _select_paper_rows(
+    rows: list[dict[str, Any]],
+    now: datetime,
+    *,
+    current_only: bool,
+    max_days_to_expiry: float,
+    max_spread: float,
+    max_book_age_seconds: float,
+    current_rules_from: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    selected: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    seen_markets: set[str] = set()
+    for row in rows:
+        reasons = _paper_row_reject_reasons(
+            row,
+            now,
+            max_days_to_expiry=max_days_to_expiry,
+            max_spread=max_spread,
+            max_book_age_seconds=max_book_age_seconds,
+            current_rules_from=current_rules_from,
+        )
+        market_id = str(row.get("market_id") or "")
+        if market_id and market_id in seen_markets:
+            reasons.append("duplicate market; newer observation kept")
+        if reasons and current_only:
+            excluded.append(
+                {
+                    "observation_id": row.get("id"),
+                    "market_id": row.get("market_id"),
+                    "asset": row.get("asset"),
+                    "question": row.get("question"),
+                    "created_at": row.get("created_at"),
+                    "reasons": reasons,
+                }
+            )
+            continue
+        selected.append(row)
+        if market_id:
+            seen_markets.add(market_id)
+    return selected, excluded
+
+
 def paper_trading_report(
     conn,
     limit: int = 100,
     stake: float = 100.0,
     now: datetime | None = None,
+    current_only: bool = True,
+    max_days_to_expiry: float = DEFAULT_MAX_DAYS_TO_EXPIRY,
+    max_spread: float = DEFAULT_MAX_SPREAD,
+    max_book_age_seconds: float = DEFAULT_MAX_BOOK_AGE_SECONDS,
+    current_rules_from: datetime = CURRENT_RULES_FROM,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
-    rows = _candidate_rows(conn, limit)
+    raw_rows = _candidate_rows(conn, limit)
+    rows, excluded = _select_paper_rows(
+        raw_rows,
+        now,
+        current_only=current_only,
+        max_days_to_expiry=max_days_to_expiry,
+        max_spread=max_spread,
+        max_book_age_seconds=max_book_age_seconds,
+        current_rules_from=current_rules_from,
+    )
     trades = []
     for row in rows:
         trades.append(_paper_trade(conn, row, now=now, default_stake=stake))
@@ -143,10 +260,17 @@ def paper_trading_report(
         "generated_at": now.isoformat(),
         "assumptions": {
             "stake": stake,
+            "current_only": current_only,
+            "current_rules_from": current_rules_from.isoformat(),
+            "max_days_to_expiry": max_days_to_expiry,
+            "max_spread": max_spread,
+            "max_book_age_seconds": max_book_age_seconds,
             "resolution": "daily OHLC high/low after observation; intraday order within a candle is unknown",
         },
         "summary": {
             "tracked": len(trades),
+            "raw_candidates": len(raw_rows),
+            "excluded_legacy": len(excluded),
             "resolved": len(resolved),
             "open": len(open_trades),
             "won": wins,
@@ -157,6 +281,7 @@ def paper_trading_report(
             "open_exposure": sum(float(trade["stake"]) for trade in open_trades),
         },
         "trades": trades,
+        "excluded": excluded[:20],
     }
 
 

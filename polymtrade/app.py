@@ -229,8 +229,22 @@ class AppHandler(SimpleHTTPRequestHandler):
         if path == "/api/paper-trading":
             limit = int(query.get("limit", ["100"])[0])
             stake = float(query.get("stake", ["100"])[0])
+            current_only = query.get("current_only", ["1"])[0] in {"1", "true", "yes"}
+            max_days = float(query.get("max_days", ["14"])[0])
+            max_spread = float(query.get("max_spread", ["0.04"])[0])
+            max_book_age = float(query.get("max_book_age_seconds", ["120"])[0])
             with connect(DB_PATH) as conn:
-                self.send_json(paper_trading_report(conn, limit=limit, stake=stake))
+                self.send_json(
+                    paper_trading_report(
+                        conn,
+                        limit=limit,
+                        stake=stake,
+                        current_only=current_only,
+                        max_days_to_expiry=max_days,
+                        max_spread=max_spread,
+                        max_book_age_seconds=max_book_age,
+                    )
+                )
             return
         if path == "/api/candidate-review":
             limit = int(query.get("limit", ["100"])[0])
