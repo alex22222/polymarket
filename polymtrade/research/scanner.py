@@ -426,6 +426,7 @@ def scan_opportunities(
     realtime_spot: bool = True,
     require_realtime_spot: bool = True,
     spot_timeout: int = 4,
+    min_expiry_minutes: int = 30,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
@@ -441,7 +442,10 @@ def scan_opportunities(
             context["vol_model"] = vol_model
     opportunities: list[dict[str, Any]] = []
     skipped = 0
+    expired_skipped = 0
+    near_expiry_skipped = 0
     scanned = 0
+    min_expiry_days = max(0, min_expiry_minutes) / 1_440.0
 
     for market in scanner_markets(conn):
         if not is_simple_touch_market(market):
@@ -458,6 +462,11 @@ def scan_opportunities(
         days_to_expiry = (end_at - now).total_seconds() / 86_400.0
         if days_to_expiry <= 0:
             skipped += 1
+            expired_skipped += 1
+            continue
+        if min_expiry_days and days_to_expiry < min_expiry_days:
+            skipped += 1
+            near_expiry_skipped += 1
             continue
         yes_price = float(market["yes_price"])
         if yes_price < min_yes_price or yes_price > max_yes_price:
@@ -508,6 +517,7 @@ def scan_opportunities(
                 "spot": context["spot"],
                 "barrier": market["barrier"],
                 "days_to_expiry": days_to_expiry,
+                "minutes_to_expiry": days_to_expiry * 1_440.0,
                 "end_date": market["end_date"],
                 "market_yes_price": yes_price,
                 "market_no_price": market.get("no_price"),
@@ -611,12 +621,15 @@ def scan_opportunities(
             "realtime_spot": realtime_spot,
             "require_realtime_spot": require_realtime_spot,
             "spot_timeout": spot_timeout,
+            "min_expiry_minutes": min_expiry_minutes,
         },
         "contexts": {asset: context for asset, context in contexts.items() if context},
         "summary": {
             "markets_total": len(scanner_markets(conn)),
             "markets_scanned": scanned,
             "markets_skipped": skipped,
+            "expired_skipped": expired_skipped,
+            "near_expiry_skipped": near_expiry_skipped,
             "opportunities": len(opportunities),
             "candidates": len(candidates),
             "best_net_edge": top[0]["net_edge"] if top else None,
@@ -650,6 +663,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-spread", type=float, default=0.04)
     parser.add_argument("--daily-spot", action="store_true", help="Use latest daily close instead of live spot ticker")
     parser.add_argument("--allow-daily-spot", action="store_true", help="Do not block candidates when live spot is unavailable")
+    parser.add_argument("--min-expiry-minutes", type=int, default=30, help="Skip markets expiring sooner than this threshold")
     return parser.parse_args()
 
 
@@ -673,6 +687,7 @@ def main() -> int:
             max_spread=args.max_spread,
             realtime_spot=not args.daily_spot,
             require_realtime_spot=not args.allow_daily_spot,
+            min_expiry_minutes=args.min_expiry_minutes,
         )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0

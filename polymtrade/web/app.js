@@ -2,6 +2,7 @@ const els = {
   topScanBtn: document.getElementById("topScanBtn"),
   refreshBtn: document.getElementById("refreshBtn"),
   statusText: document.getElementById("statusText"),
+  versionBadge: document.getElementById("versionBadge"),
   priceChart: document.getElementById("priceChart"),
   edgeChart: document.getElementById("edgeChart"),
   fetchPricesBtn: document.getElementById("fetchPricesBtn"),
@@ -120,6 +121,16 @@ function compactAge(minutes) {
   if (value < 60) return `${value.toFixed(0)}m`;
   if (value < 60 * 24) return `${(value / 60).toFixed(1)}h`;
   return `${(value / 1440).toFixed(1)}d`;
+}
+
+function expiryCell(row) {
+  const minutes = Number(row.minutes_to_expiry ?? Number(row.days_to_expiry) * 1440);
+  const end = row.end_date ? new Date(row.end_date).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "--";
+  if (!Number.isFinite(minutes)) return `--<small>${escapeHtml(end)}</small>`;
+  if (minutes <= 0) return `<span class="negative">已到期</span><small>等待结算 · ${escapeHtml(end)}</small>`;
+  if (minutes < 60) return `<span class="warning-text">${minutes.toFixed(0)}m</span><small>临近到期 · ${escapeHtml(end)}</small>`;
+  if (minutes < 1440) return `${(minutes / 60).toFixed(1)}h<small>${escapeHtml(end)}</small>`;
+  return `${(minutes / 1440).toFixed(1)}d<small>${escapeHtml(end)}</small>`;
 }
 
 function actionLabel(action) {
@@ -612,7 +623,10 @@ function paperStatusLabel(status) {
 
 function renderPaperTrading(data = {}) {
   const summary = data.summary || {};
-  if (els.paperMeta) els.paperMeta.textContent = data.assumptions?.resolution || "daily OHLC resolution";
+  if (els.paperMeta) {
+    const generated = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--";
+    els.paperMeta.textContent = `${summary.tracked ?? 0} 条 · open ${summary.open ?? 0} · 生成 ${generated}`;
+  }
   if (els.paperTracked) els.paperTracked.textContent = summary.tracked ?? "--";
   if (els.paperResolved) els.paperResolved.textContent = summary.resolved ?? "--";
   if (els.paperWinRate) els.paperWinRate.textContent = percent(summary.win_rate);
@@ -723,7 +737,7 @@ function renderScanner(data) {
   els.scannerPaths.textContent = assumptions.simulations ?? "--";
   els.scannerSkipped.textContent = summary.markets_skipped ?? "--";
   els.scannerStatus.textContent = summary.candidates > 0 ? "有候选" : "观察";
-  els.scannerMeta.textContent = `${assumptions.vol_window || "90d"} vol · ${assumptions.simulations || 0} paths`;
+  els.scannerMeta.textContent = `${assumptions.vol_window || "90d"} vol · ${assumptions.simulations || 0} paths · 最小到期 ${assumptions.min_expiry_minutes ?? 30}m`;
   const contextSources = contextSourceLabel(data.contexts || {});
   els.priceSource.textContent = contextSources || "--";
   const selectedContext = data.contexts?.[selectedAsset];
@@ -753,7 +767,7 @@ function renderScanner(data) {
           <td>${row.direction === "hit_below" ? "下破" : "上破"}</td>
           <td>${money(row.spot)}</td>
           <td>${money(row.barrier)}</td>
-          <td>${number(row.days_to_expiry, 1)}d</td>
+          <td>${expiryCell(row)}</td>
           <td>${priceCell(row)}</td>
           <td>${modelCell(row)}</td>
           <td>${signedPercent(row.net_edge)}</td>
@@ -779,6 +793,21 @@ async function loadDataSummary() {
   renderObservationSummary(data.observations || {});
 }
 
+async function loadVersion() {
+  if (!els.versionBadge) return;
+  try {
+    const data = await apiJson("/api/version");
+    const version = data.version || data.sha || "--";
+    const source = data.source === "deploy" ? "deploy" : "local";
+    const deployed = data.deployed_at ? new Date(data.deployed_at).toLocaleString("zh-CN") : "";
+    els.versionBadge.textContent = `${source} ${version}`;
+    els.versionBadge.title = deployed ? `部署时间 ${deployed}` : "本地版本";
+  } catch (error) {
+    els.versionBadge.textContent = "version --";
+    els.versionBadge.title = `版本信息读取失败：${error.message}`;
+  }
+}
+
 async function loadObservations() {
   if (!els.observationRows) return;
   const data = await apiJson("/api/scanner-observations?limit=25");
@@ -799,8 +828,27 @@ async function loadQualityAnalysis() {
 
 async function loadPaperTrading() {
   if (!els.paperRows) return;
-  const data = await apiJson("/api/paper-trading?limit=100&stake=100");
-  renderPaperTrading(data);
+  if (els.refreshPaperBtn) {
+    els.refreshPaperBtn.disabled = true;
+    els.refreshPaperBtn.textContent = "刷新中...";
+  }
+  if (els.paperMeta) els.paperMeta.textContent = "正在刷新 paper trading";
+  els.statusText.textContent = "正在刷新 Paper Trading 结果";
+  try {
+    const data = await apiJson("/api/paper-trading?limit=100&stake=100");
+    renderPaperTrading(data);
+    const summary = data.summary || {};
+    els.statusText.textContent = `Paper Trading 已刷新：${summary.tracked ?? 0} 条，已结算 ${summary.resolved ?? 0} 条`;
+  } catch (error) {
+    if (els.paperMeta) els.paperMeta.textContent = "刷新失败";
+    els.statusText.textContent = `Paper Trading 刷新失败：${error.message}`;
+    throw error;
+  } finally {
+    if (els.refreshPaperBtn) {
+      els.refreshPaperBtn.disabled = false;
+      els.refreshPaperBtn.textContent = "刷新结果";
+    }
+  }
 }
 
 async function loadCandidateReview() {
@@ -856,7 +904,7 @@ async function loadScanner() {
   els.scannerMeta.textContent = "运行中";
   els.scannerRows.innerHTML = `<tr><td colspan="14">Scanner 正在计算盘口与模型概率...</td></tr>`;
   try {
-    const data = await apiJson("/api/scanner?limit=50&edge=0.02&min_liquidity=500&simulations=800&vol_window=90d&vol_model=factor&iv_timeout=3&orderbook=1&book_limit=8&executable_notional=100&book_timeout=4&max_book_age_seconds=120&max_spread=0.04&spot=realtime&require_realtime_spot=1&spot_timeout=4");
+    const data = await apiJson("/api/scanner?limit=50&edge=0.02&min_liquidity=500&simulations=800&vol_window=90d&vol_model=factor&iv_timeout=3&orderbook=1&book_limit=8&executable_notional=100&book_timeout=4&max_book_age_seconds=120&max_spread=0.04&spot=realtime&require_realtime_spot=1&spot_timeout=4&min_expiry_minutes=30");
     renderScanner(data);
     els.statusText.textContent = `Scanner 已更新：${data.summary?.candidates ?? 0} 个候选`;
   } catch (error) {
@@ -973,13 +1021,22 @@ function toggleLogPanel(show) {
 }
 
 async function clearLogs() {
-  if (!confirm("确定要清空日志吗？保留最近 1000 条。")) return;
+  if (!confirm("确定要清空系统日志吗？清空后会保留一条清理记录。")) return;
+  if (els.clearLogsBtn) {
+    els.clearLogsBtn.disabled = true;
+    els.clearLogsBtn.textContent = "清空中...";
+  }
   try {
     const data = await apiJson("/api/logs/clear", { method: "POST" });
-    els.statusText.textContent = data.ok ? `已清理日志，剩余 ${data.remaining} 条` : "清理失败";
+    els.statusText.textContent = data.ok ? `已清空 ${data.deleted} 条日志，当前剩余 ${data.remaining} 条` : "清理失败";
     await loadLogs();
   } catch (error) {
     els.statusText.textContent = `清理日志失败：${error.message}`;
+  } finally {
+    if (els.clearLogsBtn) {
+      els.clearLogsBtn.disabled = false;
+      els.clearLogsBtn.textContent = "清空";
+    }
   }
 }
 
@@ -995,6 +1052,7 @@ async function loadDashboard() {
     loadPaperTrading(),
     loadCandidateReview(),
     loadLogs(),
+    loadVersion(),
   ]);
   const failed = results.filter((result) => result.status === "rejected");
   if (failed.length) {

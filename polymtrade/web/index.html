@@ -11,7 +11,10 @@
       <header class="topbar">
         <div>
           <p class="eyebrow">BTC / ETH Barrier Research</p>
-          <h1>Polymtrade</h1>
+          <div class="brand-line">
+            <h1>Polymtrade</h1>
+            <span id="versionBadge" class="version-badge">version --</span>
+          </div>
         </div>
         <div class="actions">
           <button id="refreshBtn" class="icon-btn" title="刷新数据" aria-label="刷新数据">↻</button>
@@ -291,7 +294,7 @@
                 <option value="report">report</option>
               </select>
               <button id="refreshLogsBtn" class="secondary-btn" title="刷新日志">↻</button>
-              <button id="clearLogsBtn" class="secondary-btn danger" title="清空旧日志">清空</button>
+              <button id="clearLogsBtn" class="secondary-btn danger" title="清空系统日志">清空</button>
               <button id="logPanelClose" class="icon-btn" title="关闭">✕</button>
             </div>
           </div>
@@ -304,6 +307,6 @@
 
       <p id="statusText" class="status-line">读取本地数据库</p>
     </main>
-    <script src="/app.js?v=26"></script>
+    <script src="/app.js?v=30"></script>
   </body>
 </html>

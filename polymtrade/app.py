@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import json
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -40,6 +41,26 @@ from polymtrade.storage.db import (
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
 DB_PATH = ROOT.parent / "polymtrade.sqlite"
+VERSION_PATH = ROOT.parent / ".deploy_version.json"
+
+
+def version_info() -> dict:
+    if VERSION_PATH.exists():
+        try:
+            payload = json.loads(VERSION_PATH.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return payload
+        except (OSError, json.JSONDecodeError):
+            pass
+    info = {"version": "local", "sha": None, "branch": None, "deployed_at": None, "source": "local"}
+    try:
+        sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT.parent, text=True).strip()
+        branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=ROOT.parent, text=True).strip()
+        dirty = subprocess.call(["git", "diff", "--quiet"], cwd=ROOT.parent) != 0
+        info.update({"version": f"{sha}{'-dirty' if dirty else ''}", "sha": sha, "branch": branch})
+    except Exception:
+        pass
+    return info
 
 
 class AppHandler(SimpleHTTPRequestHandler):
@@ -66,9 +87,9 @@ class AppHandler(SimpleHTTPRequestHandler):
         path = parsed.path
         if path == "/api/logs/clear":
             with connect(DB_PATH) as conn:
-                deleted = clear_logs(conn, keep=1000)
+                deleted = clear_logs(conn, keep=0)
+                insert_log(conn, "INFO", "system", f"Logs cleared: {deleted} deleted")
                 remaining = conn.execute("select count(*) from system_logs").fetchone()[0]
-            self.log_event("INFO", "system", f"Logs cleared: {deleted} deleted, {remaining} remaining")
             self.send_json({"ok": True, "deleted": deleted, "remaining": remaining})
             return
         if path == "/api/scanner-observations":
@@ -157,6 +178,9 @@ class AppHandler(SimpleHTTPRequestHandler):
         query = parse_qs(parsed.query)
         if path == "/api/health":
             self.send_json({"ok": True, "mode": "real-first"})
+            return
+        if path == "/api/version":
+            self.send_json(version_info())
             return
         if path == "/api/logs":
             limit = int(query.get("limit", ["100"])[0])
@@ -249,6 +273,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             realtime_spot = query.get("spot", ["realtime"])[0] != "daily"
             require_realtime_spot = query.get("require_realtime_spot", ["1"])[0] in {"1", "true", "yes"}
             spot_timeout = int(query.get("spot_timeout", ["4"])[0])
+            min_expiry_minutes = int(query.get("min_expiry_minutes", ["30"])[0])
             self.log_event("INFO", "scanner", f"Scanner started: limit={limit}, edge={edge_threshold}, vol={vol_window}")
             with connect(DB_PATH) as conn:
                 try:
@@ -270,6 +295,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                         realtime_spot=realtime_spot,
                         require_realtime_spot=require_realtime_spot,
                         spot_timeout=spot_timeout,
+                        min_expiry_minutes=min_expiry_minutes,
                     )
                     cand = result.get("summary", {}).get("candidates", 0)
                     scanned = result.get("summary", {}).get("markets_scanned", 0)

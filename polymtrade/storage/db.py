@@ -1107,6 +1107,10 @@ def automation_health(conn: sqlite3.Connection, max_age_minutes: int = 150) -> d
 
 
 def clear_logs(conn: sqlite3.Connection, keep: int = 1000) -> int:
+    if keep <= 0:
+        cur = conn.execute("delete from system_logs")
+        conn.commit()
+        return int(cur.rowcount if cur.rowcount is not None else 0)
     conn.execute(
         "delete from system_logs where id <= (select id from system_logs order by id desc limit 1 offset ?)",
         (keep,),

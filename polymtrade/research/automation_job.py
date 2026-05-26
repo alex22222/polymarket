@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--executable-notional", type=float, default=100.0)
     parser.add_argument("--max-book-age-seconds", type=int, default=120)
     parser.add_argument("--max-spread", type=float, default=0.04)
+    parser.add_argument("--min-expiry-minutes", type=int, default=30)
     return parser.parse_args()
 
 
@@ -109,6 +110,7 @@ def run_scanner(db_path: str, args: argparse.Namespace) -> dict:
             book_timeout=args.book_timeout,
             max_book_age_seconds=args.max_book_age_seconds,
             max_spread=args.max_spread,
+            min_expiry_minutes=args.min_expiry_minutes,
         )
         observation_run_id = None
         if args.save_observation:

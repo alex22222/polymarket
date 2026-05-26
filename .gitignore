@@ -37,6 +37,8 @@ env/
 *.sqlite
 *.sqlite3
 *.db
+.deploy_version.json
+.env
 
 # OS
 .DS_Store
