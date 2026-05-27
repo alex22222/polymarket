@@ -15,6 +15,7 @@ from polymtrade.data.polymarket_api import (
 )
 from polymtrade.research.scanner import scan_opportunities
 from polymtrade.research.paper import (
+    calibration_attribution_report,
     candidate_quality_report,
     candidate_review_report,
     paper_trading_report,
@@ -278,6 +279,12 @@ class AppHandler(SimpleHTTPRequestHandler):
             stake = float(query.get("stake", ["100"])[0])
             with connect(DB_PATH) as conn:
                 self.send_json(candidate_quality_report(conn, limit=limit, stake=stake))
+            return
+        if path == "/api/calibration-attribution":
+            limit = int(query.get("limit", ["500"])[0])
+            stake = float(query.get("stake", ["100"])[0])
+            with connect(DB_PATH) as conn:
+                self.send_json(calibration_attribution_report(conn, limit=limit, stake=stake))
             return
         if path == "/api/automation-health":
             max_age = int(query.get("max_age_minutes", ["150"])[0])

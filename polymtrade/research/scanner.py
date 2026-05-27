@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from polymtrade.data.derivatives import fetch_deribit_option_summaries, select_atm_iv
-from polymtrade.data.crypto_prices import fetch_best_spot
+from polymtrade.data.crypto_prices import fetch_best_spot, fetch_okx_funding_rate, fetch_okx_intraday
 from polymtrade.data.polymarket_api import fetch_order_book
 from polymtrade.storage.db import connect, data_quality_report
 from polymtrade.superpowers.barrier import (
@@ -67,6 +67,86 @@ def preferred_price_source(conn, asset: str) -> str | None:
     return best["source"]
 
 
+def _intraday_snapshot(
+    asset: str,
+    bar: str,
+    limit: int,
+    periods_per_hour: int,
+    periods_per_year: float,
+    timeout: int,
+) -> dict[str, Any]:
+    candles = fetch_okx_intraday(asset, bar=bar, limit=limit, timeout=timeout)
+    closes = [item.close for item in candles]
+    volumes = [item.volume for item in candles]
+    latest = closes[-1] if closes else None
+
+    def momentum(periods: int) -> float | None:
+        if latest is None or len(closes) <= periods or closes[-(periods + 1)] <= 0:
+            return None
+        return latest / closes[-(periods + 1)] - 1.0
+
+    recent_volume = sum(volumes[-periods_per_hour:]) if len(volumes) >= periods_per_hour else None
+    previous_volume = (
+        sum(volumes[-(periods_per_hour * 4) : -periods_per_hour])
+        if len(volumes) >= periods_per_hour * 4
+        else None
+    )
+    volume_ratio = (
+        (recent_volume / periods_per_hour) / (previous_volume / (periods_per_hour * 3))
+        if recent_volume is not None and previous_volume and previous_volume > 0
+        else None
+    )
+    return {
+        "source": "okx",
+        "bar": bar,
+        "candles": len(candles),
+        "last_ts": candles[-1].ts if candles else None,
+        "last_close": latest,
+        "last_move": momentum(1),
+        "momentum_1h": momentum(periods_per_hour),
+        "momentum_4h": momentum(periods_per_hour * 4),
+        "rv": realized_volatility(closes, periods_per_year=periods_per_year),
+        "volume_1h": recent_volume,
+        "volume_ratio_1h_vs_prev": volume_ratio,
+        "error": None,
+    }
+
+
+def market_state(asset: str, timeout: int = 4) -> dict[str, Any]:
+    state: dict[str, Any] = {"short_term": {}, "funding": {}, "errors": []}
+    try:
+        state["short_term"]["5m"] = _intraday_snapshot(
+            asset,
+            bar="5m",
+            limit=72,
+            periods_per_hour=12,
+            periods_per_year=365.0 * 24.0 * 12.0,
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - scanner should degrade when intraday data is unavailable
+        state["short_term"]["5m"] = {"source": "okx", "bar": "5m", "error": str(exc)}
+        state["errors"].append(f"okx-5m: {exc}")
+    try:
+        state["short_term"]["15m"] = _intraday_snapshot(
+            asset,
+            bar="15m",
+            limit=32,
+            periods_per_hour=4,
+            periods_per_year=365.0 * 24.0 * 4.0,
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - scanner should degrade when intraday data is unavailable
+        state["short_term"]["15m"] = {"source": "okx", "bar": "15m", "error": str(exc)}
+        state["errors"].append(f"okx-15m: {exc}")
+    try:
+        state["funding"] = fetch_okx_funding_rate(asset, timeout=timeout)
+        state["funding"]["error"] = None
+    except Exception as exc:  # noqa: BLE001 - funding is an attribution factor, not a scanner blocker
+        state["funding"] = {"source": "okx-funding", "error": str(exc)}
+        state["errors"].append(f"okx-funding: {exc}")
+    return state
+
+
 def price_context(
     conn,
     asset: str,
@@ -108,6 +188,7 @@ def price_context(
         prices = closes[-(window + 1) :]
         vols[f"{window}d"] = realized_volatility(prices)
     ewma = ewma_volatility(closes)
+    factors = market_state(asset, timeout=spot_timeout)
     return {
         "asset": asset,
         "source": spot_source,
@@ -121,6 +202,7 @@ def price_context(
         "candles": len(ordered),
         "volatility": vols,
         "ewma_volatility": ewma,
+        "market_state": factors,
     }
 
 
@@ -494,6 +576,10 @@ def scan_opportunities(
                 now=now,
             )
         vol, vol_components = blended_annual_vol(context, vol_window, iv_quote, vol_model)
+        state = context.get("market_state") or {}
+        five_minute = ((state.get("short_term") or {}).get("5m") or {})
+        fifteen_minute = ((state.get("short_term") or {}).get("15m") or {})
+        funding = state.get("funding") or {}
         result = monte_carlo_touch_probability(
             BarrierInput(
                 spot=float(context["spot"]),
@@ -540,6 +626,14 @@ def scan_opportunities(
                 "spot_fetched_at": context.get("spot_fetched_at"),
                 "spot_is_realtime": context.get("spot_is_realtime"),
                 "daily_close": context.get("daily_close"),
+                "market_state": state,
+                "short_momentum_1h": five_minute.get("momentum_1h"),
+                "short_momentum_4h": five_minute.get("momentum_4h"),
+                "short_rv_5m": five_minute.get("rv"),
+                "last_5m_move": five_minute.get("last_move"),
+                "momentum_15m_1h": fifteen_minute.get("momentum_1h"),
+                "funding_rate": funding.get("funding_rate"),
+                "next_funding_rate": funding.get("next_funding_rate"),
                 "action": "watch",
                 "review_status": "unreviewed",
                 "pricing_source": "cached",
@@ -640,6 +734,16 @@ def scan_opportunities(
             "wide_spreads": sum(1 for row in opportunities if row.get("spread") is not None and float(row["spread"]) > max_spread),
             "live_spot_assets": sum(1 for context in contexts.values() if context and context.get("spot_is_realtime")),
             "iv_assets": sum(1 for context in contexts.values() if context and context.get("iv_source")),
+            "short_term_assets": sum(
+                1
+                for context in contexts.values()
+                if context and (((context.get("market_state") or {}).get("short_term") or {}).get("5m") or {}).get("error") is None
+            ),
+            "funding_assets": sum(
+                1
+                for context in contexts.values()
+                if context and ((context.get("market_state") or {}).get("funding") or {}).get("error") is None
+            ),
         },
         "opportunities": top,
     }

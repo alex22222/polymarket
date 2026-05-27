@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Polymtrade Research</title>
-    <link rel="stylesheet" href="/styles.css?v=15" />
+    <link rel="stylesheet" href="/styles.css?v=17" />
   </head>
   <body>
     <main class="shell">
@@ -164,6 +164,58 @@
         </div>
       </section>
 
+      <section class="calibration-section view-section hidden" data-view="analysis">
+        <div class="section-head">
+          <h2>模型校准与归因</h2>
+          <div class="actions compact">
+            <span id="calibrationMeta">等待候选样本</span>
+            <button id="refreshCalibrationBtn" class="secondary-btn">刷新校准</button>
+          </div>
+        </div>
+        <div class="quality-summary">
+          <article><span>样本</span><strong id="calibrationSamples">--</strong></article>
+          <article><span>已结算</span><strong id="calibrationResolved">--</strong></article>
+          <article><span>模型 Brier</span><strong id="calibrationModelBrier">--</strong></article>
+          <article><span>市场 Brier</span><strong id="calibrationMarketBrier">--</strong></article>
+        </div>
+        <div class="calibration-grid">
+          <div class="table-wrap">
+            <table class="calibration-table">
+              <thead>
+                <tr>
+                  <th>模型概率桶</th>
+                  <th>样本</th>
+                  <th>已结算</th>
+                  <th>模型均值</th>
+                  <th>市场均值</th>
+                  <th>实际命中</th>
+                  <th>模型误差</th>
+                  <th>市场误差</th>
+                </tr>
+              </thead>
+              <tbody id="calibrationRows"></tbody>
+            </table>
+          </div>
+          <div id="attributionRows" class="attribution-rows">
+            <div class="coverage-row"><strong>等待归因</strong><span>候选样本会按薄安全边际、尾部事件、bid 下跌等原因聚合。</span></div>
+          </div>
+        </div>
+        <div class="table-wrap calibration-recent-wrap">
+          <table class="calibration-recent-table">
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>市场</th>
+                <th>模型 / 市场</th>
+                <th>最新 bid</th>
+                <th>归因</th>
+              </tr>
+            </thead>
+            <tbody id="calibrationRecentRows"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="paper-section view-section hidden" data-view="research">
         <div class="section-head">
           <h2>Paper Trading</h2>
@@ -247,7 +299,7 @@
         </div>
         <div class="scanner-summary">
           <article>
-            <span>波动率</span>
+            <span>短周期因子</span>
             <strong id="scannerVol">--</strong>
           </article>
           <article>
@@ -327,6 +379,6 @@
 
       <p id="statusText" class="status-line">读取本地数据库</p>
     </main>
-    <script src="/app.js?v=33"></script>
+    <script src="/app.js?v=36"></script>
   </body>
 </html>

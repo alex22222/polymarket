@@ -605,8 +605,61 @@ canvas {
   min-width: 980px;
 }
 
+.calibration-table {
+  min-width: 1080px;
+}
+
+.calibration-recent-table {
+  min-width: 1180px;
+}
+
 .candidate-review-table {
   min-width: 1280px;
+}
+
+.calibration-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 0.8fr);
+  margin-bottom: 12px;
+}
+
+.attribution-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.attribution-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfa;
+  padding: 12px;
+}
+
+.attribution-row strong {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 5px;
+}
+
+.attribution-row span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mini-tag {
+  background: #eef2f7;
+  border-radius: 999px;
+  color: var(--blue);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  margin: 0 5px 5px 0;
+  padding: 4px 8px;
+}
+
+.calibration-recent-wrap {
+  margin-top: 12px;
 }
 
 .paper-rows {
@@ -661,6 +714,17 @@ canvas {
   display: block;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.external-link {
+  color: var(--blue);
+  font-weight: 800;
+  margin-left: 8px;
+  text-decoration: none;
+}
+
+.external-link:hover {
+  text-decoration: underline;
 }
 
 .position-metrics {
@@ -950,6 +1014,7 @@ td small {
   .source-health-rows,
   .observation-rows,
   .quality-summary,
+  .calibration-grid,
   .paper-summary,
   .position-metrics,
   .risk-metrics,

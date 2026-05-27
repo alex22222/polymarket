@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote_plus
 
 from polymtrade.research.scanner import order_book_metrics, parse_datetime, preferred_price_source
 
@@ -10,6 +11,7 @@ CURRENT_RULES_FROM = datetime(2026, 5, 26, tzinfo=timezone.utc)
 DEFAULT_MAX_DAYS_TO_EXPIRY = 14.0
 DEFAULT_MAX_SPREAD = 0.04
 DEFAULT_MAX_BOOK_AGE_SECONDS = 120.0
+POLYMTRADE_EVENT_BASE_URL = "https://polym.trade/event"
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -170,6 +172,27 @@ def _risk_panel(row: dict[str, Any], now: datetime, stake: float, price: float, 
     }
 
 
+def _market_link(conn, market_id: str | None, question: str | None) -> dict[str, Any]:
+    if market_id:
+        row = conn.execute(
+            "select slug, question from barrier_markets where market_id = ?",
+            (market_id,),
+        ).fetchone()
+        if row and row["slug"]:
+            slug = str(row["slug"])
+            return {
+                "market_slug": slug,
+                "market_url": f"{POLYMTRADE_EVENT_BASE_URL}/{slug}",
+                "market_url_source": "slug",
+            }
+    query = question or market_id or ""
+    return {
+        "market_slug": None,
+        "market_url": f"https://polym.trade/search?q={quote_plus(query)}" if query else None,
+        "market_url_source": "search" if query else "missing",
+    }
+
+
 def _position_recommendation(trade: dict[str, Any], metrics: dict[str, Any]) -> tuple[str, str, list[str]]:
     risk = trade.get("risk") or {}
     notes: list[str] = []
@@ -244,6 +267,7 @@ def position_management_report(
         unrealized_return = unrealized_pnl / stake if unrealized_pnl is not None and stake else None
         trade["unrealized_return"] = unrealized_return
         action, label, notes = _position_recommendation(trade, metrics)
+        link = _market_link(conn, str(trade.get("market_id") or ""), str(trade.get("question") or ""))
         positions.append(
             {
                 "observation_id": trade.get("observation_id"),
@@ -270,6 +294,7 @@ def position_management_report(
                 "recommendation": action,
                 "recommendation_label": label,
                 "notes": notes,
+                **link,
             }
         )
     counts = {"hold": 0, "review": 0, "exit": 0}
@@ -526,6 +551,220 @@ def _edge_bucket(value: Any) -> str:
     if edge < 0.10:
         return "5-10%"
     return "10%+"
+
+
+def _probability_bucket(value: Any) -> str:
+    probability = _float_or_none(value)
+    if probability is None:
+        return "unknown"
+    if probability < 0.05:
+        return "0-5%"
+    if probability < 0.10:
+        return "5-10%"
+    if probability < 0.20:
+        return "10-20%"
+    if probability < 0.40:
+        return "20-40%"
+    return "40%+"
+
+
+def _empty_calibration_bucket(name: str) -> dict[str, Any]:
+    return {
+        "bucket": name,
+        "samples": 0,
+        "resolved": 0,
+        "open": 0,
+        "avg_model_probability": 0.0,
+        "avg_market_probability": 0.0,
+        "actual_rate": None,
+        "model_error": None,
+        "market_error": None,
+        "model_brier": None,
+        "market_brier": None,
+    }
+
+
+def _latest_market_observation(conn, market_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        select id, created_at, action, market_yes_price, best_bid, best_ask, spread, pricing_source
+        from scanner_observations
+        where market_id = ?
+          and best_bid is not null
+        order by id desc
+        limit 1
+        """,
+        (market_id,),
+    ).fetchone()
+    if not row:
+        row = conn.execute(
+            """
+            select id, created_at, action, market_yes_price, best_bid, best_ask, spread, pricing_source
+            from scanner_observations
+            where market_id = ?
+            order by id desc
+            limit 1
+            """,
+            (market_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _attribution_labels(row: dict[str, Any], trade: dict[str, Any], latest: dict[str, Any] | None) -> list[str]:
+    labels: list[str] = []
+    risk = trade.get("risk") or {}
+    safety_margin = _float_or_none(risk.get("safety_margin"))
+    required_move_pct = _float_or_none(risk.get("required_move_pct"))
+    days_remaining = _float_or_none(risk.get("days_remaining"))
+    spread = _float_or_none(row.get("spread"))
+    entry = _float_or_none(row.get("market_yes_price"))
+    latest_bid = _float_or_none(latest.get("best_bid")) if latest else None
+    if safety_margin is not None and safety_margin < 0.05:
+        labels.append("安全边际偏薄")
+    if required_move_pct is not None and abs(required_move_pct) >= 0.05:
+        labels.append("短期尾部事件")
+    if days_remaining is not None and days_remaining < 3:
+        labels.append("临近到期")
+    if spread is None:
+        labels.append("缺少 spread")
+    elif spread > DEFAULT_MAX_SPREAD:
+        labels.append("入场 spread 偏宽")
+    if row.get("pricing_source") != "orderbook":
+        labels.append("非实时盘口定价")
+    if row.get("orderbook_is_fresh") is False:
+        labels.append("入场盘口过期")
+    if entry and latest_bid is not None:
+        move = latest_bid / entry - 1
+        if move <= -0.25:
+            labels.append("入选后 bid 明显下跌")
+        elif move >= 0.25:
+            labels.append("入选后 bid 明显上涨")
+    if trade.get("status") == "lost":
+        labels.append("已结算亏损")
+    elif trade.get("status") == "won":
+        labels.append("已结算盈利")
+    return labels or ["暂无明显归因"]
+
+
+def _finalize_calibration_bucket(group: dict[str, Any]) -> dict[str, Any]:
+    samples = int(group["samples"])
+    resolved = int(group["resolved"])
+    group["avg_model_probability"] = group.pop("_model_sum", 0.0) / samples if samples else None
+    group["avg_market_probability"] = group.pop("_market_sum", 0.0) / samples if samples else None
+    hit_sum = group.pop("_hit_sum", 0.0)
+    group["actual_rate"] = hit_sum / resolved if resolved else None
+    model_brier_sum = group.pop("_model_brier_sum", 0.0)
+    market_brier_sum = group.pop("_market_brier_sum", 0.0)
+    group["model_brier"] = model_brier_sum / resolved if resolved else None
+    group["market_brier"] = market_brier_sum / resolved if resolved else None
+    if group["actual_rate"] is not None:
+        group["model_error"] = group["avg_model_probability"] - group["actual_rate"]
+        group["market_error"] = group["avg_market_probability"] - group["actual_rate"]
+    return group
+
+
+def calibration_attribution_report(
+    conn,
+    limit: int = 500,
+    stake: float = 100.0,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    now = now or datetime.now(timezone.utc)
+    rows = _candidate_rows(conn, limit)
+    buckets: dict[str, dict[str, Any]] = {}
+    attribution_counts: dict[str, int] = {}
+    recent: list[dict[str, Any]] = []
+    resolved_count = 0
+    model_brier_sum = 0.0
+    market_brier_sum = 0.0
+    edge_sum = 0.0
+    for row in rows:
+        trade = _paper_trade(conn, row, now=now, default_stake=stake)
+        model_p = _float_or_none(row.get("model_probability"))
+        market_p = _float_or_none(row.get("market_yes_price"))
+        if model_p is not None and market_p is not None:
+            edge_sum += model_p - market_p
+        bucket_name = _probability_bucket(model_p)
+        group = buckets.setdefault(bucket_name, _empty_calibration_bucket(bucket_name))
+        group["samples"] += 1
+        group["_model_sum"] = group.get("_model_sum", 0.0) + float(model_p or 0.0)
+        group["_market_sum"] = group.get("_market_sum", 0.0) + float(market_p or 0.0)
+        actual: int | None = None
+        if trade["status"] == "won":
+            actual = 1
+        elif trade["status"] == "lost":
+            actual = 0
+        if actual is None:
+            group["open"] += 1
+        else:
+            group["resolved"] += 1
+            resolved_count += 1
+            group["_hit_sum"] = group.get("_hit_sum", 0.0) + actual
+            if model_p is not None:
+                brier = (model_p - actual) ** 2
+                group["_model_brier_sum"] = group.get("_model_brier_sum", 0.0) + brier
+                model_brier_sum += brier
+            if market_p is not None:
+                brier = (market_p - actual) ** 2
+                group["_market_brier_sum"] = group.get("_market_brier_sum", 0.0) + brier
+                market_brier_sum += brier
+        latest = _latest_market_observation(conn, str(row.get("market_id") or ""))
+        labels = _attribution_labels(row, trade, latest)
+        for label in labels:
+            attribution_counts[label] = attribution_counts.get(label, 0) + 1
+        latest_bid = _float_or_none(latest.get("best_bid")) if latest else None
+        entry = _float_or_none(row.get("market_yes_price"))
+        recent.append(
+            {
+                "observation_id": row["id"],
+                "created_at": row["created_at"],
+                "asset": row["asset"],
+                "question": row["question"],
+                "status": trade["status"],
+                "model_probability": model_p,
+                "market_probability": market_p,
+                "actual": actual,
+                "net_edge": row.get("net_edge"),
+                "entry_price": entry,
+                "latest_bid": latest_bid,
+                "latest_observed_at": latest.get("created_at") if latest else None,
+                "bid_change": (latest_bid / entry - 1) if latest_bid is not None and entry else None,
+                "risk_level": (trade.get("risk") or {}).get("risk_level"),
+                "attributions": labels,
+            }
+        )
+    ordered_buckets = [_finalize_calibration_bucket(group) for group in buckets.values()]
+    bucket_order = {"0-5%": 0, "5-10%": 1, "10-20%": 2, "20-40%": 3, "40%+": 4, "unknown": 9}
+    ordered_buckets.sort(key=lambda item: bucket_order.get(item["bucket"], 99))
+    attribution = [
+        {"label": label, "count": count}
+        for label, count in sorted(attribution_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    model_brier = model_brier_sum / resolved_count if resolved_count else None
+    market_brier = market_brier_sum / resolved_count if resolved_count else None
+    if model_brier is None or market_brier is None:
+        better = "insufficient"
+    elif model_brier < market_brier:
+        better = "model"
+    elif market_brier < model_brier:
+        better = "market"
+    else:
+        better = "tie"
+    return {
+        "generated_at": now.isoformat(),
+        "summary": {
+            "samples": len(rows),
+            "resolved": resolved_count,
+            "open": len(rows) - resolved_count,
+            "avg_model_minus_market": edge_sum / len(rows) if rows else None,
+            "model_brier": model_brier,
+            "market_brier": market_brier,
+            "better_calibration": better,
+        },
+        "buckets": ordered_buckets,
+        "attribution": attribution,
+        "recent": recent[:30],
+    }
 
 
 def _book_quality(raw: dict[str, Any]) -> str:

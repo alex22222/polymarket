@@ -29,6 +29,15 @@ const els = {
   qualityGroups: document.getElementById("qualityGroups"),
   qualityRows: document.getElementById("qualityRows"),
   refreshQualityBtn: document.getElementById("refreshQualityBtn"),
+  calibrationMeta: document.getElementById("calibrationMeta"),
+  calibrationSamples: document.getElementById("calibrationSamples"),
+  calibrationResolved: document.getElementById("calibrationResolved"),
+  calibrationModelBrier: document.getElementById("calibrationModelBrier"),
+  calibrationMarketBrier: document.getElementById("calibrationMarketBrier"),
+  calibrationRows: document.getElementById("calibrationRows"),
+  attributionRows: document.getElementById("attributionRows"),
+  calibrationRecentRows: document.getElementById("calibrationRecentRows"),
+  refreshCalibrationBtn: document.getElementById("refreshCalibrationBtn"),
   paperMeta: document.getElementById("paperMeta"),
   paperTracked: document.getElementById("paperTracked"),
   paperResolved: document.getElementById("paperResolved"),
@@ -118,6 +127,11 @@ function signedPercent(value) {
   return `<span class="${cls}">${percent(value)}</span>`;
 }
 
+function signedPercentText(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+  return `${Number(value) >= 0 ? "+" : ""}${percent(value)}`;
+}
+
 function number(value, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
   return Number(value).toFixed(digits);
@@ -186,7 +200,16 @@ function modelCell(row) {
   const source = row.annual_vol_source || "rv";
   const vol = Number.isFinite(Number(row.annual_vol)) ? percent(row.annual_vol) : "--";
   const iv = row.vol_components?.iv ? ` · IV ${percent(row.vol_components.iv)}` : "";
-  return `${percent(row.model_probability)}<small>${escapeHtml(source)} · vol ${vol}${iv}</small>`;
+  const state = row.market_state || {};
+  const short = state.short_term?.["5m"] || {};
+  const funding = state.funding || {};
+  const factors = [
+    `1h ${signedPercentText(short.momentum_1h)}`,
+    `4h ${signedPercentText(short.momentum_4h)}`,
+    `RV5m ${percent(short.rv)}`,
+    `fund ${signedPercentText(funding.funding_rate)}`,
+  ].join(" · ");
+  return `${percent(row.model_probability)}<small>${escapeHtml(source)} · vol ${vol}${iv}</small><small>${escapeHtml(factors)}</small>`;
 }
 
 function scannerRowsForAsset(asset) {
@@ -201,6 +224,18 @@ function contextSourceLabel(contexts = {}) {
   const live = items.every((item) => item.spot_is_realtime) ? "live spot" : "daily fallback";
   if (sources.length === 1) return `${assets} ${sources[0]} · ${live}`;
   return `${items.map((item) => `${item.asset}:${item.source}`).join(" / ")} · ${live}`;
+}
+
+function contextFactorLabel(context) {
+  if (!context) return "--";
+  const state = context.market_state || {};
+  const short = state.short_term?.["5m"] || {};
+  const funding = state.funding || {};
+  const shortLabel = short.error
+    ? "5m unavailable"
+    : `5m 1h ${signedPercentText(short.momentum_1h)} / RV ${percent(short.rv)}`;
+  const fundingLabel = funding.error ? "funding unavailable" : `funding ${signedPercentText(funding.funding_rate)}`;
+  return `${shortLabel} · ${fundingLabel}`;
 }
 
 function setActiveView(view) {
@@ -622,6 +657,78 @@ function renderQualityAnalysis(data = {}) {
     .join("");
 }
 
+function renderCalibration(data = {}) {
+  const summary = data.summary || {};
+  if (els.calibrationMeta) {
+    const generated = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--";
+    const better = summary.better_calibration === "model" ? "模型较准" : summary.better_calibration === "market" ? "市场较准" : "样本不足";
+    els.calibrationMeta.textContent = `${better} · open ${summary.open ?? 0} · 生成 ${generated}`;
+  }
+  if (els.calibrationSamples) els.calibrationSamples.textContent = summary.samples ?? "--";
+  if (els.calibrationResolved) els.calibrationResolved.textContent = summary.resolved ?? "--";
+  if (els.calibrationModelBrier) els.calibrationModelBrier.textContent = number(summary.model_brier, 4);
+  if (els.calibrationMarketBrier) els.calibrationMarketBrier.textContent = number(summary.market_brier, 4);
+
+  const buckets = data.buckets || [];
+  if (els.calibrationRows) {
+    if (!buckets.length) {
+      els.calibrationRows.innerHTML = `<tr><td colspan="8">暂无校准样本</td></tr>`;
+    } else {
+      els.calibrationRows.innerHTML = buckets
+        .map((row) => `
+          <tr>
+            <td>${escapeHtml(row.bucket)}</td>
+            <td>${row.samples}<small>open ${row.open}</small></td>
+            <td>${row.resolved}</td>
+            <td>${percent(row.avg_model_probability)}</td>
+            <td>${percent(row.avg_market_probability)}</td>
+            <td>${percent(row.actual_rate)}</td>
+            <td>${signedPercent(row.model_error)}</td>
+            <td>${signedPercent(row.market_error)}</td>
+          </tr>
+        `)
+        .join("");
+    }
+  }
+
+  const attributions = data.attribution || [];
+  if (els.attributionRows) {
+    if (!attributions.length) {
+      els.attributionRows.innerHTML = `<div class="coverage-row"><strong>暂无归因</strong><span>需要 candidate 样本。</span></div>`;
+    } else {
+      els.attributionRows.innerHTML = attributions
+        .slice(0, 8)
+        .map((row) => `
+          <div class="attribution-row">
+            <strong>${escapeHtml(row.label)}</strong>
+            <span>${row.count} 条候选</span>
+          </div>
+        `)
+        .join("");
+    }
+  }
+
+  const recent = data.recent || [];
+  if (els.calibrationRecentRows) {
+    if (!recent.length) {
+      els.calibrationRecentRows.innerHTML = `<tr><td colspan="5">暂无候选样本</td></tr>`;
+    } else {
+      els.calibrationRecentRows.innerHTML = recent
+        .slice(0, 20)
+        .map((row) => `
+          <tr>
+            <td>${paperStatusLabel(row.status)}<small>${new Date(row.created_at).toLocaleDateString()}</small></td>
+            <td class="question">${escapeHtml(row.question)}</td>
+            <td>${percent(row.model_probability)}<small>market ${percent(row.market_probability)}</small></td>
+            <td>${percent(row.latest_bid)}<small>${signedPercent(row.bid_change)}</small></td>
+            <td>${(row.attributions || []).map((item) => `<span class="mini-tag">${escapeHtml(item)}</span>`).join("")}</td>
+          </tr>
+        `)
+        .join("");
+    }
+  }
+}
+
 function paperStatusLabel(status) {
   if (status === "won") return `<span class="pill positive-pill">赢</span>`;
   if (status === "lost") return `<span class="pill negative-pill">亏</span>`;
@@ -702,6 +809,12 @@ function recommendationPill(action, label) {
   return `<span class="pill warning-pill">${escapeHtml(label || "观察退出")}</span>`;
 }
 
+function externalLink(url, label) {
+  if (!url) return "";
+  const safeUrl = escapeHtml(url);
+  return `<a class="external-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
+}
+
 function renderPositions(data = {}) {
   const summary = data.summary || {};
   if (els.positionMeta) {
@@ -726,7 +839,7 @@ function renderPositions(data = {}) {
           <span>${recommendationPill(row.recommendation, row.recommendation_label)} ${escapeHtml(row.asset)}</span>
           <span>${signedPercent(row.unrealized_return)}</span>
         </strong>
-        <span>${escapeHtml(row.question)}</span>
+        <span>${escapeHtml(row.question)} ${externalLink(row.market_url, "打开 Polymtrade")}</span>
         <div class="position-metrics">
           <span>入场 <strong>${percent(row.entry_price)}</strong></span>
           <span>卖出 bid <strong>${percent(row.current_best_bid)}</strong></span>
@@ -820,20 +933,20 @@ function renderScanner(data) {
   els.scannerBestEdge.innerHTML = signedPercent(summary.best_net_edge);
   els.scannerBestRoi.innerHTML = signedPercent(summary.best_roi);
   els.scannerScanned.textContent = summary.markets_scanned ?? "--";
-  els.scannerVol.textContent = assumptions.vol_window || "--";
+  const selectedContext = data.contexts?.[selectedAsset];
+  els.scannerVol.textContent = contextFactorLabel(selectedContext);
   els.scannerPaths.textContent = assumptions.simulations ?? "--";
   els.scannerSkipped.textContent = summary.markets_skipped ?? "--";
   els.scannerStatus.textContent = summary.candidates > 0 ? "有候选" : "观察";
   els.scannerMeta.textContent = `${assumptions.vol_window || "90d"} vol · ${assumptions.simulations || 0} paths · 最小到期 ${assumptions.min_expiry_minutes ?? 30}m`;
   const contextSources = contextSourceLabel(data.contexts || {});
   els.priceSource.textContent = contextSources || "--";
-  const selectedContext = data.contexts?.[selectedAsset];
   const selectedVol = selectedContext?.volatility?.[assumptions.vol_window];
   els.stackData.textContent = contextSources || "无真实价格源";
   const ewmaVol = selectedContext?.ewma_volatility;
   const ivState = selectedContext?.iv_source ? "Deribit IV on" : selectedContext?.iv_error ? "Deribit IV unavailable" : "IV off";
   els.stackModel.textContent = `${assumptions.vol_model || "factor"} vol · RV ${assumptions.vol_window || "90d"}${selectedVol ? ` ${percent(selectedVol)}` : ""}${ewmaVol ? ` · EWMA ${percent(ewmaVol)}` : ""} · ${ivState} · ${assumptions.simulations || 0} paths`;
-  els.stackCost.textContent = `fee ${percent(assumptions.fee_rate)} · slippage ${Number(assumptions.slippage_bps || 0).toFixed(0)} bps · min edge ${percent(assumptions.edge_threshold)}`;
+  els.stackCost.textContent = `fee ${percent(assumptions.fee_rate)} · slippage ${Number(assumptions.slippage_bps || 0).toFixed(0)} bps · min edge ${percent(assumptions.edge_threshold)} · ${contextFactorLabel(selectedContext)}`;
   els.stackExecution.textContent = assumptions.orderbook
     ? `盘口 ${summary.orderbook_priced ?? 0}/${assumptions.book_limit} · 过期 ${summary.stale_orderbooks ?? 0} · 部分 ${summary.partial_fills ?? 0} · 候选 ${summary.candidates ?? 0}`
     : `cached price · min liquidity ${money(assumptions.min_liquidity)} · ${summary.candidates ?? 0} candidates`;
@@ -911,6 +1024,30 @@ async function loadQualityAnalysis() {
   if (!els.qualityRows) return;
   const data = await apiJson("/api/quality-analysis?limit=500&stake=100");
   renderQualityAnalysis(data);
+}
+
+async function loadCalibration() {
+  if (!els.calibrationRows) return;
+  if (els.refreshCalibrationBtn) {
+    els.refreshCalibrationBtn.disabled = true;
+    els.refreshCalibrationBtn.textContent = "刷新中...";
+  }
+  if (els.calibrationMeta) els.calibrationMeta.textContent = "正在刷新校准";
+  try {
+    const data = await apiJson("/api/calibration-attribution?limit=500&stake=100");
+    renderCalibration(data);
+    const summary = data.summary || {};
+    els.statusText.textContent = `模型校准已刷新：样本 ${summary.samples ?? 0}，已结算 ${summary.resolved ?? 0}`;
+  } catch (error) {
+    if (els.calibrationMeta) els.calibrationMeta.textContent = "刷新失败";
+    els.statusText.textContent = `模型校准刷新失败：${error.message}`;
+    throw error;
+  } finally {
+    if (els.refreshCalibrationBtn) {
+      els.refreshCalibrationBtn.disabled = false;
+      els.refreshCalibrationBtn.textContent = "刷新校准";
+    }
+  }
 }
 
 async function loadPaperTrading() {
@@ -1042,7 +1179,7 @@ async function saveObservation() {
       body: JSON.stringify(lastScanner),
     });
     if (!data.ok) throw new Error(data.error || "save api failed");
-    await Promise.all([loadObservations(), loadQualityAnalysis(), loadPaperTrading(), loadPositions(), loadCandidateReview(), loadAutomationHealth(), loadLogs()]);
+    await Promise.all([loadObservations(), loadQualityAnalysis(), loadCalibration(), loadPaperTrading(), loadPositions(), loadCandidateReview(), loadAutomationHealth(), loadLogs()]);
     els.statusText.textContent = `已保存观测 run #${data.run_id}`;
   } catch (error) {
     els.statusText.textContent = `保存观测失败：${error.message}`;
@@ -1160,6 +1297,7 @@ async function loadDashboard() {
     loadObservations(),
     loadAutomationHealth(),
     loadQualityAnalysis(),
+    loadCalibration(),
     loadPaperTrading(),
     loadPositions(),
     loadCandidateReview(),
@@ -1183,6 +1321,7 @@ els.topScanBtn.addEventListener("click", () => {
 if (els.saveObservationBtn) els.saveObservationBtn.addEventListener("click", saveObservation);
 if (els.refreshHealthBtn) els.refreshHealthBtn.addEventListener("click", loadAutomationHealth);
 if (els.refreshQualityBtn) els.refreshQualityBtn.addEventListener("click", loadQualityAnalysis);
+if (els.refreshCalibrationBtn) els.refreshCalibrationBtn.addEventListener("click", loadCalibration);
 if (els.refreshPaperBtn) els.refreshPaperBtn.addEventListener("click", loadPaperTrading);
 if (els.refreshPositionsBtn) els.refreshPositionsBtn.addEventListener("click", loadPositions);
 if (els.refreshCandidateReviewBtn) els.refreshCandidateReviewBtn.addEventListener("click", loadCandidateReview);

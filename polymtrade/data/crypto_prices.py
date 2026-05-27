@@ -15,10 +15,13 @@ BINANCE_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
 BINANCE_DATA_API_TICKER_URL = "https://data-api.binance.vision/api/v3/ticker/price"
 COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/{product}/candles"
 OKX_HISTORY_CANDLES_URL = "https://www.okx.com/api/v5/market/history-candles"
+OKX_CANDLES_URL = "https://www.okx.com/api/v5/market/candles"
 OKX_TICKER_URL = "https://www.okx.com/api/v5/market/ticker"
+OKX_FUNDING_RATE_URL = "https://www.okx.com/api/v5/public/funding-rate"
 SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
 COINBASE_PRODUCTS = {"BTC": "BTC-USD", "ETH": "ETH-USD"}
 OKX_PRODUCTS = {"BTC": "BTC-USDT", "ETH": "ETH-USDT"}
+OKX_SWAP_PRODUCTS = {"BTC": "BTC-USDT-SWAP", "ETH": "ETH-USDT-SWAP"}
 
 
 @dataclass(frozen=True)
@@ -170,6 +173,68 @@ def fetch_okx_daily(asset: str, limit: int = 365) -> list[Candle]:
             )
         )
     return candles
+
+
+def _okx_candle_from_row(asset: str, row: list[Any], interval: str) -> Candle:
+    opened_ms = int(row[0])
+    return Candle(
+        asset=asset,
+        ts=datetime.fromtimestamp(opened_ms / 1000, timezone.utc).isoformat(),
+        open=float(row[1]),
+        high=float(row[2]),
+        low=float(row[3]),
+        close=float(row[4]),
+        volume=float(row[5]),
+        source="okx",
+        interval=interval,
+    )
+
+
+def fetch_okx_intraday(asset: str, bar: str = "5m", limit: int = 48, timeout: int = 4) -> list[Candle]:
+    asset = asset.upper()
+    inst_id = OKX_PRODUCTS[asset]
+    payload = _get_json(
+        OKX_CANDLES_URL,
+        {"instId": inst_id, "bar": bar, "limit": max(1, min(300, limit))},
+        timeout=timeout,
+        retries=0,
+    )
+    if str(payload.get("code")) != "0":
+        raise RuntimeError(f"OKX error {payload.get('code')}: {payload.get('msg')}")
+    rows = payload.get("data") or []
+    return [_okx_candle_from_row(asset, row, bar) for row in sorted(rows, key=lambda item: int(item[0]))]
+
+
+def fetch_okx_funding_rate(asset: str, timeout: int = 4) -> dict[str, Any]:
+    asset = asset.upper()
+    payload = _get_json(
+        OKX_FUNDING_RATE_URL,
+        {"instId": OKX_SWAP_PRODUCTS[asset]},
+        timeout=timeout,
+        retries=0,
+    )
+    if str(payload.get("code")) != "0":
+        raise RuntimeError(f"OKX error {payload.get('code')}: {payload.get('msg')}")
+    rows = payload.get("data") or []
+    if not rows:
+        raise RuntimeError("OKX returned no funding rows")
+    row = rows[0]
+
+    def iso_ms(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        return datetime.fromtimestamp(int(value) / 1000, timezone.utc).isoformat()
+
+    return {
+        "asset": asset,
+        "source": "okx-funding",
+        "inst_id": row.get("instId"),
+        "funding_rate": float(row["fundingRate"]) if row.get("fundingRate") not in (None, "") else None,
+        "next_funding_rate": float(row["nextFundingRate"]) if row.get("nextFundingRate") not in (None, "") else None,
+        "funding_time": iso_ms(row.get("fundingTime")),
+        "next_funding_time": iso_ms(row.get("nextFundingTime")),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def fetch_binance_data_api_spot(asset: str, timeout: int = 4) -> SpotQuote:
