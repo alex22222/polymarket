@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from polymtrade.data.derivatives import fetch_deribit_option_summaries, select_atm_iv
-from polymtrade.data.crypto_prices import fetch_best_spot, fetch_okx_funding_rate, fetch_okx_intraday
+from polymtrade.data.crypto_prices import (
+    fetch_best_spot,
+    fetch_okx_funding_rate,
+    fetch_okx_intraday,
+    fetch_okx_open_interest,
+)
+from polymtrade.data.macro_events import macro_context, macro_risk_for_market
 from polymtrade.data.polymarket_api import fetch_order_book
 from polymtrade.storage.db import connect, data_quality_report
 from polymtrade.superpowers.barrier import (
@@ -25,6 +31,15 @@ SOURCE_PRIORITY = {
     "okx": 2,
     "coinbase": 3,
 }
+
+
+def float_or_none(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def parse_datetime(value: str | None) -> datetime | None:
@@ -65,6 +80,57 @@ def preferred_price_source(conn, asset: str) -> str | None:
         return None
     best = sorted(rows, key=lambda row: (SOURCE_PRIORITY.get(row["source"], 5), -row["candles"]))[0]
     return best["source"]
+
+
+def latest_observed_market_state(conn, asset: str) -> dict[str, Any] | None:
+    rows = conn.execute(
+        """
+        select contexts_json
+        from scanner_observation_runs
+        order by id desc
+        limit 25
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            contexts = json.loads(row["contexts_json"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        state = ((contexts.get(asset.upper()) or {}).get("market_state") or {})
+        if state:
+            return state
+    return None
+
+
+def funding_oi_tags(
+    funding: dict[str, Any],
+    open_interest: dict[str, Any],
+    short_term: dict[str, Any],
+) -> list[str]:
+    tags: list[str] = []
+    funding_rate = funding.get("funding_rate")
+    oi_change = open_interest.get("open_interest_change")
+    momentum_1h = short_term.get("momentum_1h")
+    if isinstance(funding_rate, (int, float)):
+        if funding_rate <= -0.0003:
+            tags.append("funding 极负")
+        elif funding_rate >= 0.0003:
+            tags.append("funding 极正")
+    if isinstance(oi_change, (int, float)):
+        if oi_change <= -0.05:
+            tags.append("OI 被清洗")
+        elif oi_change >= 0.05:
+            tags.append("OI 堆积")
+    if "funding 极负" in tags and "OI 被清洗" in tags:
+        tags.append("空头拥挤后去杠杆")
+    elif "funding 极负" in tags and "OI 堆积" in tags:
+        tags.append("空头拥挤但未清洗")
+    if isinstance(momentum_1h, (int, float)):
+        if momentum_1h > 0 and "funding 极负" in tags:
+            tags.append("反弹确认观察")
+        elif momentum_1h < 0 and "funding 极正" in tags:
+            tags.append("回落确认观察")
+    return tags
 
 
 def _intraday_snapshot(
@@ -112,8 +178,15 @@ def _intraday_snapshot(
     }
 
 
-def market_state(asset: str, timeout: int = 4) -> dict[str, Any]:
-    state: dict[str, Any] = {"short_term": {}, "funding": {}, "errors": []}
+def market_state(asset: str, timeout: int = 4, previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "short_term": {},
+        "funding": {},
+        "open_interest": {},
+        "regime": {"etf_flow": "not_configured", "onchain_accumulation": "deferred"},
+        "signals": [],
+        "errors": [],
+    }
     try:
         state["short_term"]["5m"] = _intraday_snapshot(
             asset,
@@ -144,6 +217,26 @@ def market_state(asset: str, timeout: int = 4) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - funding is an attribution factor, not a scanner blocker
         state["funding"] = {"source": "okx-funding", "error": str(exc)}
         state["errors"].append(f"okx-funding: {exc}")
+    try:
+        open_interest = fetch_okx_open_interest(asset, timeout=timeout)
+        previous_oi = ((previous or {}).get("open_interest") or {}).get("open_interest_usd")
+        current_oi = open_interest.get("open_interest_usd")
+        if isinstance(previous_oi, (int, float)) and previous_oi > 0 and isinstance(current_oi, (int, float)):
+            open_interest["previous_open_interest_usd"] = previous_oi
+            open_interest["open_interest_change"] = current_oi / previous_oi - 1.0
+        else:
+            open_interest["previous_open_interest_usd"] = previous_oi
+            open_interest["open_interest_change"] = None
+        open_interest["error"] = None
+        state["open_interest"] = open_interest
+    except Exception as exc:  # noqa: BLE001 - open interest is an attribution factor, not a scanner blocker
+        state["open_interest"] = {"source": "okx-open-interest", "error": str(exc)}
+        state["errors"].append(f"okx-open-interest: {exc}")
+    state["signals"] = funding_oi_tags(
+        state.get("funding") or {},
+        state.get("open_interest") or {},
+        (state.get("short_term") or {}).get("5m") or {},
+    )
     return state
 
 
@@ -188,7 +281,7 @@ def price_context(
         prices = closes[-(window + 1) :]
         vols[f"{window}d"] = realized_volatility(prices)
     ewma = ewma_volatility(closes)
-    factors = market_state(asset, timeout=spot_timeout)
+    factors = market_state(asset, timeout=spot_timeout, previous=latest_observed_market_state(conn, asset))
     return {
         "asset": asset,
         "source": spot_source,
@@ -299,10 +392,9 @@ def parse_book_levels(levels: Any, reverse: bool = False) -> list[dict[str, floa
     if not isinstance(levels, list):
         return parsed
     for level in levels:
-        try:
-            price = float(level["price"])
-            size = float(level["size"])
-        except (KeyError, TypeError, ValueError):
+        price = float_or_none(level.get("price") if isinstance(level, dict) else None)
+        size = float_or_none(level.get("size") if isinstance(level, dict) else None)
+        if price is None or size is None:
             continue
         if price <= 0 or size <= 0:
             continue
@@ -382,9 +474,9 @@ def order_book_metrics(
         "best_bid": best_bid,
         "best_ask": best_ask,
         "spread": (best_ask - best_bid) if best_bid is not None and best_ask is not None else None,
-        "last_trade_price": float(book["last_trade_price"]) if book.get("last_trade_price") is not None else None,
-        "tick_size": float(book["tick_size"]) if book.get("tick_size") is not None else None,
-        "min_order_size": float(book["min_order_size"]) if book.get("min_order_size") is not None else None,
+        "last_trade_price": float_or_none(book.get("last_trade_price")),
+        "tick_size": float_or_none(book.get("tick_size")),
+        "min_order_size": float_or_none(book.get("min_order_size")),
         "executable_price": avg_price,
         "executable_notional": fill.get("executable_notional"),
         "executable_shares": fill.get("executable_shares"),
@@ -432,7 +524,10 @@ def add_review(
 
     if orderbook_enabled:
         if row.get("pricing_source") != "orderbook":
-            check("book", "fail", row.get("orderbook_error") or "实时盘口不可用")
+            if row.get("pricing_source") == "cached-orderbook-not-sampled":
+                check("book", "warn", row.get("orderbook_error") or "未进入本次盘口抽样范围")
+            else:
+                check("book", "fail", row.get("orderbook_error") or "实时盘口不可用")
         else:
             age = row.get("orderbook_age_seconds")
             if row.get("orderbook_is_fresh"):
@@ -472,17 +567,51 @@ def add_review(
     elif blockers:
         row["action"] = "avoid" if row.get("net_edge") is not None and float(row["net_edge"]) <= -edge_threshold else "watch"
         row["review_status"] = "blocked"
-    elif row.get("net_edge") is not None and float(row["net_edge"]) >= edge_threshold:
+    elif (
+        row.get("net_edge") is not None
+        and float(row["net_edge"]) >= edge_threshold
+        and (not orderbook_enabled or row.get("pricing_source") == "orderbook")
+    ):
         row["action"] = "candidate"
         row["review_status"] = "passed"
     else:
         row["action"] = "watch"
         row["review_status"] = "watch"
+    assign_opportunity_tier(row, edge_threshold=edge_threshold)
 
 
-def opportunity_sort_key(row: dict[str, Any]) -> tuple[int, float, float]:
+def assign_opportunity_tier(row: dict[str, Any], edge_threshold: float) -> None:
+    edge = float_or_none(row.get("net_edge"))
+    blockers = row.get("review_blockers") or []
+    if row.get("action") == "candidate":
+        row["opportunity_tier"] = "candidate"
+        row["opportunity_tier_label"] = "候选"
+        row["opportunity_tier_reason"] = "净 edge 达标且盘口复核通过"
+    elif edge is not None and edge >= max(0.01, edge_threshold * 0.5):
+        row["opportunity_tier"] = "near"
+        row["opportunity_tier_label"] = "准候选"
+        row["opportunity_tier_reason"] = "edge 接近阈值" if not blockers else f"edge 接近阈值；{blockers[0]}"
+    elif edge is not None and edge >= 0:
+        row["opportunity_tier"] = "research"
+        row["opportunity_tier_label"] = "研究机会"
+        row["opportunity_tier_reason"] = "模型概率高于市场但安全边际不足" if not blockers else blockers[0]
+    elif blockers:
+        row["opportunity_tier"] = "blocked"
+        row["opportunity_tier_label"] = "阻断"
+        row["opportunity_tier_reason"] = blockers[0]
+    else:
+        row["opportunity_tier"] = "ignore"
+        row["opportunity_tier_label"] = "忽略"
+        row["opportunity_tier_reason"] = "模型概率未高于市场"
+
+
+def opportunity_sort_key(row: dict[str, Any]) -> tuple[int, int, float, float]:
+    tier_priority = {"candidate": 5, "near": 4, "research": 3, "blocked": 2, "ignore": 1}.get(
+        str(row.get("opportunity_tier")),
+        0,
+    )
     priority = {"candidate": 3, "watch": 2, "verify": 1, "avoid": 0}.get(str(row.get("action")), 0)
-    return (priority, float(row.get("net_edge") or 0.0), float(row.get("liquidity") or 0.0))
+    return (tier_priority, priority, float(row.get("net_edge") or 0.0), float(row.get("liquidity") or 0.0))
 
 
 def scan_opportunities(
@@ -512,10 +641,14 @@ def scan_opportunities(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
+    macro = macro_context(now=now, horizon_hours=168)
     contexts = {
         asset: price_context(conn, asset, realtime_spot=realtime_spot, spot_timeout=spot_timeout)
         for asset in ("BTC", "ETH")
     }
+    for context in contexts.values():
+        if context:
+            context["macro"] = macro
     iv_surfaces, iv_errors = fetch_iv_surfaces(("BTC", "ETH"), timeout=iv_timeout) if vol_model == "factor" else ({}, {})
     for asset, context in contexts.items():
         if context:
@@ -550,11 +683,16 @@ def scan_opportunities(
             skipped += 1
             near_expiry_skipped += 1
             continue
-        yes_price = float(market["yes_price"])
+        yes_price = float_or_none(market.get("yes_price"))
+        barrier = float_or_none(market.get("barrier"))
+        spot = float_or_none(context.get("spot"))
+        if yes_price is None or barrier is None or spot is None:
+            skipped += 1
+            continue
         if yes_price < min_yes_price or yes_price > max_yes_price:
             skipped += 1
             continue
-        liquidity = float(market.get("liquidity") or 0.0)
+        liquidity = float_or_none(market.get("liquidity")) or 0.0
         if liquidity < min_liquidity:
             skipped += 1
             continue
@@ -562,16 +700,16 @@ def scan_opportunities(
         scanned += 1
         direction = normalized_direction(market)
         already_touched = (
-            float(context["spot"]) >= float(market["barrier"])
+            spot >= barrier
             if direction == "hit_above"
-            else float(context["spot"]) <= float(market["barrier"])
+            else spot <= barrier
         )
         iv_quote = None
         if vol_model == "factor":
             iv_quote = select_atm_iv(
                 market["asset"],
                 iv_surfaces.get(market["asset"], []),
-                spot=float(context["spot"]),
+                spot=spot,
                 days_to_expiry=days_to_expiry,
                 now=now,
             )
@@ -580,10 +718,12 @@ def scan_opportunities(
         five_minute = ((state.get("short_term") or {}).get("5m") or {})
         fifteen_minute = ((state.get("short_term") or {}).get("15m") or {})
         funding = state.get("funding") or {}
+        open_interest = state.get("open_interest") or {}
+        macro_risk = macro_risk_for_market(now, end_at)
         result = monte_carlo_touch_probability(
             BarrierInput(
-                spot=float(context["spot"]),
-                barrier=float(market["barrier"]),
+                spot=spot,
+                barrier=barrier,
                 days_to_expiry=days_to_expiry,
                 annual_vol=vol,
                 direction=direction,
@@ -600,8 +740,8 @@ def scan_opportunities(
                 "asset": market["asset"],
                 "question": market["question"],
                 "direction": direction,
-                "spot": context["spot"],
-                "barrier": market["barrier"],
+                "spot": spot,
+                "barrier": barrier,
                 "days_to_expiry": days_to_expiry,
                 "minutes_to_expiry": days_to_expiry * 1_440.0,
                 "end_date": market["end_date"],
@@ -634,6 +774,12 @@ def scan_opportunities(
                 "momentum_15m_1h": fifteen_minute.get("momentum_1h"),
                 "funding_rate": funding.get("funding_rate"),
                 "next_funding_rate": funding.get("next_funding_rate"),
+                "open_interest_usd": open_interest.get("open_interest_usd"),
+                "open_interest_change": open_interest.get("open_interest_change"),
+                "factor_signals": state.get("signals") or [],
+                "macro_risk": macro_risk,
+                "macro_risk_level": macro_risk.get("risk_level"),
+                "macro_event_labels": macro_risk.get("labels") or [],
                 "action": "watch",
                 "review_status": "unreviewed",
                 "pricing_source": "cached",
@@ -691,6 +837,8 @@ def scan_opportunities(
         opportunities.sort(key=opportunity_sort_key, reverse=True)
     top = opportunities[:limit]
     candidates = [row for row in opportunities if row["action"] == "candidate"]
+    near_candidates = [row for row in opportunities if row.get("opportunity_tier") == "near"]
+    research_opportunities = [row for row in opportunities if row.get("opportunity_tier") == "research"]
     return {
         "generated_at": now.isoformat(),
         "assumptions": {
@@ -726,6 +874,8 @@ def scan_opportunities(
             "near_expiry_skipped": near_expiry_skipped,
             "opportunities": len(opportunities),
             "candidates": len(candidates),
+            "near_candidates": len(near_candidates),
+            "research_opportunities": len(research_opportunities),
             "best_net_edge": top[0]["net_edge"] if top else None,
             "best_roi": top[0]["roi"] if top else None,
             "orderbook_priced": sum(1 for row in opportunities if row.get("pricing_source") == "orderbook"),
@@ -744,6 +894,17 @@ def scan_opportunities(
                 for context in contexts.values()
                 if context and ((context.get("market_state") or {}).get("funding") or {}).get("error") is None
             ),
+            "open_interest_assets": sum(
+                1
+                for context in contexts.values()
+                if context and ((context.get("market_state") or {}).get("open_interest") or {}).get("error") is None
+            ),
+            "factor_signal_assets": sum(
+                1 for context in contexts.values() if context and ((context.get("market_state") or {}).get("signals") or [])
+            ),
+            "macro_active_events": macro.get("active_count"),
+            "macro_upcoming_events": macro.get("upcoming_count"),
+            "macro_risk_rows": sum(1 for row in opportunities if row.get("macro_risk_level") in {"high", "medium"}),
         },
         "opportunities": top,
     }

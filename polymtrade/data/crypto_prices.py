@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +17,7 @@ OKX_HISTORY_CANDLES_URL = "https://www.okx.com/api/v5/market/history-candles"
 OKX_CANDLES_URL = "https://www.okx.com/api/v5/market/candles"
 OKX_TICKER_URL = "https://www.okx.com/api/v5/market/ticker"
 OKX_FUNDING_RATE_URL = "https://www.okx.com/api/v5/public/funding-rate"
+OKX_OPEN_INTEREST_URL = "https://www.okx.com/api/v5/public/open-interest"
 SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
 COINBASE_PRODUCTS = {"BTC": "BTC-USD", "ETH": "ETH-USD"}
 OKX_PRODUCTS = {"BTC": "BTC-USDT", "ETH": "ETH-USDT"}
@@ -59,10 +59,6 @@ def _get_json(url: str, params: dict[str, Any], timeout: int = 8, retries: int =
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except (TimeoutError, urllib.error.URLError) as exc:
-            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
-                context = ssl._create_unverified_context()
-                with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
             if attempt >= retries:
                 raise
             time.sleep(1 + attempt)
@@ -234,6 +230,33 @@ def fetch_okx_funding_rate(asset: str, timeout: int = 4) -> dict[str, Any]:
         "funding_time": iso_ms(row.get("fundingTime")),
         "next_funding_time": iso_ms(row.get("nextFundingTime")),
         "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def fetch_okx_open_interest(asset: str, timeout: int = 4) -> dict[str, Any]:
+    asset = asset.upper()
+    payload = _get_json(
+        OKX_OPEN_INTEREST_URL,
+        {"instType": "SWAP", "instId": OKX_SWAP_PRODUCTS[asset]},
+        timeout=timeout,
+        retries=0,
+    )
+    if str(payload.get("code")) != "0":
+        raise RuntimeError(f"OKX error {payload.get('code')}: {payload.get('msg')}")
+    rows = payload.get("data") or []
+    if not rows:
+        raise RuntimeError("OKX returned no open interest rows")
+    row = rows[0]
+    return {
+        "asset": asset,
+        "source": "okx-open-interest",
+        "inst_id": row.get("instId"),
+        "open_interest_contracts": float(row["oi"]) if row.get("oi") not in (None, "") else None,
+        "open_interest_ccy": float(row["oiCcy"]) if row.get("oiCcy") not in (None, "") else None,
+        "open_interest_usd": float(row["oiUsd"]) if row.get("oiUsd") not in (None, "") else None,
+        "fetched_at": datetime.fromtimestamp(int(row["ts"]) / 1000, timezone.utc).isoformat()
+        if row.get("ts")
+        else datetime.now(timezone.utc).isoformat(),
     }
 
 

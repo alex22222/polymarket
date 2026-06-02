@@ -461,7 +461,7 @@ def _select_paper_rows(
         market_id = str(row.get("market_id") or "")
         if market_id and market_id in seen_markets:
             reasons.append("duplicate market; newer observation kept")
-        if reasons and current_only:
+        if reasons and (current_only or "duplicate market; newer observation kept" in reasons):
             excluded.append(
                 {
                     "observation_id": row.get("id"),
@@ -678,12 +678,14 @@ def calibration_attribution_report(
     model_brier_sum = 0.0
     market_brier_sum = 0.0
     edge_sum = 0.0
+    edge_count = 0
     for row in rows:
         trade = _paper_trade(conn, row, now=now, default_stake=stake)
         model_p = _float_or_none(row.get("model_probability"))
         market_p = _float_or_none(row.get("market_yes_price"))
         if model_p is not None and market_p is not None:
             edge_sum += model_p - market_p
+            edge_count += 1
         bucket_name = _probability_bucket(model_p)
         group = buckets.setdefault(bucket_name, _empty_calibration_bucket(bucket_name))
         group["samples"] += 1
@@ -756,7 +758,7 @@ def calibration_attribution_report(
             "samples": len(rows),
             "resolved": resolved_count,
             "open": len(rows) - resolved_count,
-            "avg_model_minus_market": edge_sum / len(rows) if rows else None,
+            "avg_model_minus_market": edge_sum / edge_count if edge_count else None,
             "model_brier": model_brier,
             "market_brier": market_brier,
             "better_calibration": better,

@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Polymtrade Research</title>
-    <link rel="stylesheet" href="/styles.css?v=17" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css?v=18" />
   </head>
   <body>
     <main class="shell">
@@ -28,9 +29,9 @@
 
       <nav class="view-tabs" aria-label="模块视图">
         <button class="view-tab active" data-view-tab="overview">总览</button>
-        <button class="view-tab" data-view-tab="analysis">分析&监控</button>
-        <button class="view-tab" data-view-tab="research">研究记录</button>
-        <button class="view-tab" data-view-tab="scanner">Scanner</button>
+        <button class="view-tab" data-view-tab="scanner">机会扫描</button>
+        <button class="view-tab" data-view-tab="validation">验证复盘</button>
+        <button class="view-tab" data-view-tab="system">数据系统</button>
       </nav>
 
       <section class="metrics" aria-label="核心指标">
@@ -81,7 +82,7 @@
         </aside>
       </section>
 
-      <section class="data-section view-section" data-view="overview">
+      <section class="data-section view-section hidden" data-view="system">
         <div class="section-head">
           <h2>数据覆盖</h2>
           <div class="actions compact">
@@ -98,7 +99,7 @@
         <div id="coverageRows" class="coverage-rows coverage-grid"></div>
       </section>
 
-      <section class="health-section view-section hidden" data-view="analysis">
+      <section class="health-section view-section hidden" data-view="system">
         <div class="section-head">
           <h2>自动化健康</h2>
           <div class="actions compact">
@@ -118,7 +119,7 @@
         </div>
       </section>
 
-      <section class="observation-section view-section hidden" data-view="research">
+      <section class="observation-section view-section hidden" data-view="validation">
         <div class="section-head">
           <h2>研究记录</h2>
           <div class="actions compact">
@@ -131,7 +132,7 @@
         </div>
       </section>
 
-      <section class="quality-section view-section hidden" data-view="analysis">
+      <section class="quality-section view-section hidden" data-view="validation">
         <div class="section-head">
           <h2>候选质量分析</h2>
           <div class="actions compact">
@@ -164,7 +165,26 @@
         </div>
       </section>
 
-      <section class="calibration-section view-section hidden" data-view="analysis">
+      <section class="macro-section view-section" data-view="overview">
+        <div class="section-head">
+          <h2>宏观事件</h2>
+          <div class="actions compact">
+            <span id="macroMeta">等待事件日历</span>
+            <button id="refreshMacroBtn" class="secondary-btn">刷新事件</button>
+          </div>
+        </div>
+        <div class="quality-summary">
+          <article><span>活跃窗口</span><strong id="macroActive">--</strong></article>
+          <article><span>未来事件</span><strong id="macroUpcoming">--</strong></article>
+          <article><span>高影响</span><strong id="macroHighImpact">--</strong></article>
+          <article><span>数据源</span><strong id="macroSource">--</strong></article>
+        </div>
+        <div id="macroRows" class="macro-rows">
+          <div class="coverage-row"><strong>等待事件</strong><span>未来 CPI / FOMC / 非农 / GDP 会在这里展示。</span></div>
+        </div>
+      </section>
+
+      <section class="calibration-section view-section hidden" data-view="validation">
         <div class="section-head">
           <h2>模型校准与归因</h2>
           <div class="actions compact">
@@ -216,7 +236,7 @@
         </div>
       </section>
 
-      <section class="paper-section view-section hidden" data-view="research">
+      <section class="paper-section view-section hidden" data-view="validation">
         <div class="section-head">
           <h2>Paper Trading</h2>
           <div class="actions compact">
@@ -236,7 +256,7 @@
         </div>
       </section>
 
-      <section class="position-section view-section hidden" data-view="research">
+      <section class="position-section view-section hidden" data-view="validation">
         <div class="section-head">
           <h2>持仓管理</h2>
           <div class="actions compact">
@@ -256,7 +276,7 @@
         </div>
       </section>
 
-      <section class="candidate-review-section view-section hidden" data-view="research">
+      <section class="candidate-review-section view-section hidden" data-view="validation">
         <div class="section-head">
           <h2>候选复盘</h2>
           <div class="actions compact">
@@ -311,6 +331,14 @@
             <strong id="scannerSkipped">--</strong>
           </article>
           <article>
+            <span>准候选</span>
+            <strong id="scannerNear">--</strong>
+          </article>
+          <article>
+            <span>研究机会</span>
+            <strong id="scannerResearch">--</strong>
+          </article>
+          <article>
             <span>状态</span>
             <strong id="scannerStatus">--</strong>
           </article>
@@ -327,6 +355,7 @@
             <thead>
               <tr>
                 <th class="sortable" data-sort="action">动作</th>
+                <th class="sortable" data-sort="opportunity_tier">层级</th>
                 <th class="sortable" data-sort="review_status">复核</th>
                 <th class="sortable" data-sort="asset">资产</th>
                 <th class="sortable" data-sort="question">市场</th>
@@ -379,6 +408,6 @@
 
       <p id="statusText" class="status-line">读取本地数据库</p>
     </main>
-    <script src="/app.js?v=36"></script>
+    <script src="/app.js?v=41"></script>
   </body>
 </html>

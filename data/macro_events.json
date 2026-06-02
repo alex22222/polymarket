@@ -1,0 +1,71 @@
+{
+  "updated_at": "2026-06-02T00:00:00+08:00",
+  "events": [
+    {
+      "id": "2026-06-05-us-employment",
+      "type": "employment",
+      "title": "US Employment Situation",
+      "scheduled_at": "2026-06-05T12:30:00+00:00",
+      "impact": "high",
+      "pre_window_hours": 24,
+      "post_window_hours": 6,
+      "source": "BLS release schedule",
+      "notes": "Monthly nonfarm payrolls and unemployment rate."
+    },
+    {
+      "id": "2026-06-10-us-cpi",
+      "type": "cpi",
+      "title": "US CPI",
+      "scheduled_at": "2026-06-10T12:30:00+00:00",
+      "impact": "high",
+      "pre_window_hours": 24,
+      "post_window_hours": 8,
+      "source": "BLS CPI release schedule",
+      "notes": "Monthly CPI release; can raise short-term jump risk."
+    },
+    {
+      "id": "2026-06-17-fomc-statement",
+      "type": "fomc",
+      "title": "FOMC Statement",
+      "scheduled_at": "2026-06-17T18:00:00+00:00",
+      "impact": "high",
+      "pre_window_hours": 48,
+      "post_window_hours": 12,
+      "source": "Federal Reserve FOMC calendar",
+      "notes": "Policy statement and rate decision."
+    },
+    {
+      "id": "2026-06-17-fomc-press",
+      "type": "fomc",
+      "title": "FOMC Press Conference",
+      "scheduled_at": "2026-06-17T18:30:00+00:00",
+      "impact": "high",
+      "pre_window_hours": 48,
+      "post_window_hours": 12,
+      "source": "Federal Reserve FOMC calendar",
+      "notes": "Chair press conference; can move rates, USD, equities, and crypto."
+    },
+    {
+      "id": "2026-06-25-us-gdp",
+      "type": "gdp",
+      "title": "US GDP",
+      "scheduled_at": "2026-06-25T12:30:00+00:00",
+      "impact": "medium",
+      "pre_window_hours": 12,
+      "post_window_hours": 4,
+      "source": "BEA release schedule",
+      "notes": "GDP release; lower immediate crypto impact than CPI/FOMC/NFP."
+    },
+    {
+      "id": "2026-07-29-fomc-statement",
+      "type": "fomc",
+      "title": "FOMC Statement",
+      "scheduled_at": "2026-07-29T18:00:00+00:00",
+      "impact": "high",
+      "pre_window_hours": 48,
+      "post_window_hours": 12,
+      "source": "Federal Reserve FOMC calendar",
+      "notes": "Policy statement and rate decision."
+    }
+  ]
+}

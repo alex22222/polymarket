@@ -29,6 +29,13 @@ const els = {
   qualityGroups: document.getElementById("qualityGroups"),
   qualityRows: document.getElementById("qualityRows"),
   refreshQualityBtn: document.getElementById("refreshQualityBtn"),
+  macroMeta: document.getElementById("macroMeta"),
+  macroActive: document.getElementById("macroActive"),
+  macroUpcoming: document.getElementById("macroUpcoming"),
+  macroHighImpact: document.getElementById("macroHighImpact"),
+  macroSource: document.getElementById("macroSource"),
+  macroRows: document.getElementById("macroRows"),
+  refreshMacroBtn: document.getElementById("refreshMacroBtn"),
   calibrationMeta: document.getElementById("calibrationMeta"),
   calibrationSamples: document.getElementById("calibrationSamples"),
   calibrationResolved: document.getElementById("calibrationResolved"),
@@ -72,6 +79,8 @@ const els = {
   scannerVol: document.getElementById("scannerVol"),
   scannerPaths: document.getElementById("scannerPaths"),
   scannerSkipped: document.getElementById("scannerSkipped"),
+  scannerNear: document.getElementById("scannerNear"),
+  scannerResearch: document.getElementById("scannerResearch"),
   scannerStatus: document.getElementById("scannerStatus"),
   priceSource: document.getElementById("priceSource"),
   stackData: document.getElementById("stackData"),
@@ -104,6 +113,15 @@ function percent(value) {
 function money(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+function compactMoney(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+  const amount = Number(value);
+  if (Math.abs(amount) >= 1_000_000_000) return `$${(amount / 1_000_000_000).toFixed(2)}B`;
+  if (Math.abs(amount) >= 1_000_000) return `$${(amount / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(amount) >= 1_000) return `$${(amount / 1_000).toFixed(1)}K`;
+  return money(amount);
 }
 
 async function apiJson(url, options) {
@@ -162,6 +180,18 @@ function actionLabel(action) {
   return `<span class="pill neutral-pill">观察</span>`;
 }
 
+function tierCell(row) {
+  const tier = row.opportunity_tier || "ignore";
+  const label = row.opportunity_tier_label || tier;
+  const cls = {
+    candidate: "positive-pill",
+    near: "warning-pill",
+    research: "neutral-pill",
+    blocked: "negative-pill",
+  }[tier] || "neutral-pill";
+  return `<span class="pill ${cls}">${escapeHtml(label)}</span><small>${escapeHtml(row.opportunity_tier_reason || "")}</small>`;
+}
+
 function reviewCell(row) {
   const statusMap = {
     passed: ["通过", "positive"],
@@ -203,13 +233,19 @@ function modelCell(row) {
   const state = row.market_state || {};
   const short = state.short_term?.["5m"] || {};
   const funding = state.funding || {};
+  const oi = state.open_interest || {};
+  const tags = (row.factor_signals || state.signals || []).slice(0, 2).join(" / ");
+  const macro = row.macro_risk || {};
+  const macroLabels = (row.macro_event_labels || macro.labels || []).slice(0, 2).join(" / ");
   const factors = [
     `1h ${signedPercentText(short.momentum_1h)}`,
     `4h ${signedPercentText(short.momentum_4h)}`,
     `RV5m ${percent(short.rv)}`,
     `fund ${signedPercentText(funding.funding_rate)}`,
+    `OI ${signedPercentText(oi.open_interest_change)}`,
   ].join(" · ");
-  return `${percent(row.model_probability)}<small>${escapeHtml(source)} · vol ${vol}${iv}</small><small>${escapeHtml(factors)}</small>`;
+  const macroText = macro.risk_level && macro.risk_level !== "normal" ? `macro ${macro.risk_level}${macroLabels ? ` · ${macroLabels}` : ""}` : "";
+  return `${percent(row.model_probability)}<small>${escapeHtml(source)} · vol ${vol}${iv}</small><small>${escapeHtml(factors)}</small>${tags ? `<small>${escapeHtml(tags)}</small>` : ""}${macroText ? `<small>${escapeHtml(macroText)}</small>` : ""}`;
 }
 
 function scannerRowsForAsset(asset) {
@@ -231,15 +267,22 @@ function contextFactorLabel(context) {
   const state = context.market_state || {};
   const short = state.short_term?.["5m"] || {};
   const funding = state.funding || {};
+  const oi = state.open_interest || {};
+  const macro = context.macro || {};
   const shortLabel = short.error
     ? "5m unavailable"
     : `5m 1h ${signedPercentText(short.momentum_1h)} / RV ${percent(short.rv)}`;
   const fundingLabel = funding.error ? "funding unavailable" : `funding ${signedPercentText(funding.funding_rate)}`;
-  return `${shortLabel} · ${fundingLabel}`;
+  const oiLabel = oi.error ? "OI unavailable" : `OI ${compactMoney(oi.open_interest_usd)} / ${signedPercentText(oi.open_interest_change)}`;
+  const signals = (state.signals || []).slice(0, 2).join(" / ");
+  const activeMacro = macro.active_count ? `macro active ${macro.active_count}` : macro.upcoming_count ? `macro next ${macro.upcoming_count}` : "macro normal";
+  return `${shortLabel} · ${fundingLabel} · ${oiLabel} · ${activeMacro}${signals ? ` · ${signals}` : ""}`;
 }
 
 function setActiveView(view) {
-  const allowed = new Set(["overview", "analysis", "research", "scanner"]);
+  const legacyViews = { analysis: "validation", research: "validation" };
+  view = legacyViews[view] || view;
+  const allowed = new Set(["overview", "scanner", "validation", "system"]);
   activeView = allowed.has(view) ? view : "overview";
   document.querySelectorAll(".view-tab").forEach((button) => {
     button.classList.toggle("active", button.dataset.viewTab === activeView);
@@ -657,6 +700,49 @@ function renderQualityAnalysis(data = {}) {
     .join("");
 }
 
+function impactPill(impact) {
+  if (impact === "high") return `<span class="pill negative-pill">高影响</span>`;
+  if (impact === "medium") return `<span class="pill warning-pill">中影响</span>`;
+  return `<span class="pill neutral-pill">低影响</span>`;
+}
+
+function renderMacroEvents(data = {}) {
+  const events = data.upcoming || [];
+  const active = data.active || [];
+  const highImpact = events.filter((event) => event.impact === "high").length;
+  if (els.macroMeta) {
+    const generated = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--";
+    els.macroMeta.textContent = `未来 ${Number(data.horizon_hours || 0).toFixed(0)}h · 生成 ${generated}`;
+  }
+  if (els.macroActive) els.macroActive.textContent = active.length;
+  if (els.macroUpcoming) els.macroUpcoming.textContent = events.length;
+  if (els.macroHighImpact) els.macroHighImpact.textContent = highImpact;
+  if (els.macroSource) els.macroSource.textContent = data.source || "--";
+  if (!els.macroRows) return;
+  if (!events.length && !active.length) {
+    els.macroRows.innerHTML = `<div class="coverage-row"><strong>暂无宏观事件</strong><span>当前窗口内没有配置的 CPI / FOMC / 非农 / GDP。</span></div>`;
+    return;
+  }
+  const rows = [...active.map((event) => ({ ...event, active: true })), ...events.map((event) => ({ ...event, active: false }))];
+  els.macroRows.innerHTML = rows
+    .map((event) => {
+      const at = event.scheduled_at ? new Date(event.scheduled_at).toLocaleString("zh-CN") : "--";
+      const hours = Number.isFinite(Number(event.hours_until)) ? `${Number(event.hours_until).toFixed(1)}h` : "--";
+      return `
+        <div class="macro-row">
+          <strong>
+            <span>${escapeHtml(event.title || "--")}</span>
+            ${impactPill(event.impact)}
+          </strong>
+          <span>${event.active ? "活跃窗口" : "未来事件"} · ${escapeHtml(event.type || "macro")} · 距离 ${escapeHtml(hours)}</span>
+          <span>${escapeHtml(at)} · ${escapeHtml(event.source || "manual")}</span>
+          <span>${escapeHtml(event.notes || "")}</span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
 function renderCalibration(data = {}) {
   const summary = data.summary || {};
   if (els.calibrationMeta) {
@@ -811,7 +897,14 @@ function recommendationPill(action, label) {
 
 function externalLink(url, label) {
   if (!url) return "";
-  const safeUrl = escapeHtml(url);
+  let parsed = null;
+  try {
+    parsed = new URL(url, window.location.origin);
+  } catch (error) {
+    return "";
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) return "";
+  const safeUrl = escapeHtml(parsed.href);
   return `<a class="external-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
 }
 
@@ -889,6 +982,10 @@ function sortValue(row, field) {
     const order = { candidate: 0, verify: 1, watch: 2, avoid: 3 };
     return order[row.action] ?? 99;
   }
+  if (field === "opportunity_tier") {
+    const order = { candidate: 0, near: 1, research: 2, blocked: 3, ignore: 4 };
+    return order[row.opportunity_tier] ?? 99;
+  }
   if (field === "review_status") {
     const order = { passed: 0, verify: 1, watch: 2, blocked: 3 };
     return order[row.review_status] ?? 99;
@@ -937,7 +1034,9 @@ function renderScanner(data) {
   els.scannerVol.textContent = contextFactorLabel(selectedContext);
   els.scannerPaths.textContent = assumptions.simulations ?? "--";
   els.scannerSkipped.textContent = summary.markets_skipped ?? "--";
-  els.scannerStatus.textContent = summary.candidates > 0 ? "有候选" : "观察";
+  if (els.scannerNear) els.scannerNear.textContent = summary.near_candidates ?? "--";
+  if (els.scannerResearch) els.scannerResearch.textContent = summary.research_opportunities ?? "--";
+  els.scannerStatus.textContent = summary.candidates > 0 ? "有候选" : summary.near_candidates > 0 ? "有准候选" : summary.research_opportunities > 0 ? "有研究机会" : "观察";
   els.scannerMeta.textContent = `${assumptions.vol_window || "90d"} vol · ${assumptions.simulations || 0} paths · 最小到期 ${assumptions.min_expiry_minutes ?? 30}m`;
   const contextSources = contextSourceLabel(data.contexts || {});
   els.priceSource.textContent = contextSources || "--";
@@ -948,12 +1047,12 @@ function renderScanner(data) {
   els.stackModel.textContent = `${assumptions.vol_model || "factor"} vol · RV ${assumptions.vol_window || "90d"}${selectedVol ? ` ${percent(selectedVol)}` : ""}${ewmaVol ? ` · EWMA ${percent(ewmaVol)}` : ""} · ${ivState} · ${assumptions.simulations || 0} paths`;
   els.stackCost.textContent = `fee ${percent(assumptions.fee_rate)} · slippage ${Number(assumptions.slippage_bps || 0).toFixed(0)} bps · min edge ${percent(assumptions.edge_threshold)} · ${contextFactorLabel(selectedContext)}`;
   els.stackExecution.textContent = assumptions.orderbook
-    ? `盘口 ${summary.orderbook_priced ?? 0}/${assumptions.book_limit} · 过期 ${summary.stale_orderbooks ?? 0} · 部分 ${summary.partial_fills ?? 0} · 候选 ${summary.candidates ?? 0}`
-    : `cached price · min liquidity ${money(assumptions.min_liquidity)} · ${summary.candidates ?? 0} candidates`;
+    ? `盘口 ${summary.orderbook_priced ?? 0}/${assumptions.book_limit} · 过期 ${summary.stale_orderbooks ?? 0} · 部分 ${summary.partial_fills ?? 0} · macro ${summary.macro_risk_rows ?? 0} · 候选 ${summary.candidates ?? 0}`
+    : `cached price · min liquidity ${money(assumptions.min_liquidity)} · macro ${summary.macro_risk_rows ?? 0} · ${summary.candidates ?? 0} candidates`;
   drawEdgeChart(rows);
   drawPriceChart(lastPrices);
   if (!rows.length) {
-    els.scannerRows.innerHTML = `<tr><td colspan="14">暂无可扫描市场</td></tr>`;
+    els.scannerRows.innerHTML = `<tr><td colspan="15">暂无可扫描市场</td></tr>`;
     return;
   }
   els.scannerRows.innerHTML = rows
@@ -961,6 +1060,7 @@ function renderScanner(data) {
       (row) => `
         <tr>
           <td>${actionLabel(row.action)}</td>
+          <td class="review-cell">${tierCell(row)}</td>
           <td class="review-cell">${reviewCell(row)}</td>
           <td>${escapeHtml(row.asset)}</td>
           <td class="question">${escapeHtml(row.question)}</td>
@@ -1024,6 +1124,12 @@ async function loadQualityAnalysis() {
   if (!els.qualityRows) return;
   const data = await apiJson("/api/quality-analysis?limit=500&stake=100");
   renderQualityAnalysis(data);
+}
+
+async function loadMacroEvents() {
+  if (!els.macroRows) return;
+  const data = await apiJson("/api/macro-events?horizon_hours=720");
+  renderMacroEvents(data);
 }
 
 async function loadCalibration() {
@@ -1297,6 +1403,7 @@ async function loadDashboard() {
     loadObservations(),
     loadAutomationHealth(),
     loadQualityAnalysis(),
+    loadMacroEvents(),
     loadCalibration(),
     loadPaperTrading(),
     loadPositions(),
@@ -1321,6 +1428,7 @@ els.topScanBtn.addEventListener("click", () => {
 if (els.saveObservationBtn) els.saveObservationBtn.addEventListener("click", saveObservation);
 if (els.refreshHealthBtn) els.refreshHealthBtn.addEventListener("click", loadAutomationHealth);
 if (els.refreshQualityBtn) els.refreshQualityBtn.addEventListener("click", loadQualityAnalysis);
+if (els.refreshMacroBtn) els.refreshMacroBtn.addEventListener("click", loadMacroEvents);
 if (els.refreshCalibrationBtn) els.refreshCalibrationBtn.addEventListener("click", loadCalibration);
 if (els.refreshPaperBtn) els.refreshPaperBtn.addEventListener("click", loadPaperTrading);
 if (els.refreshPositionsBtn) els.refreshPositionsBtn.addEventListener("click", loadPositions);

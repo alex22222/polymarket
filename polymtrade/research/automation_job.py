@@ -231,7 +231,7 @@ def source_health_rows(result: dict) -> list[dict]:
     binance_spot_errors = [
         f"{asset}: {'; '.join(context.get('spot_errors') or [])}"
         for asset, context in contexts.items()
-        if context.get("spot_errors") and not str(context.get("source") or "").startswith("binance")
+        if context.get("spot_errors") and str(context.get("source") or "").startswith("binance")
     ]
     if binance_spot_assets:
         status = "healthy" if not binance_spot_errors else "degraded"

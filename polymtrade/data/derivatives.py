@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import ssl
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -51,12 +51,8 @@ def _get_json(url: str, params: dict[str, Any], timeout: int = 3) -> Any:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    except (TimeoutError, urllib.error.URLError) as exc:
-        if "CERTIFICATE_VERIFY_FAILED" not in str(exc):
-            raise
-        context = ssl._create_unverified_context()
-        with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+    except (TimeoutError, urllib.error.URLError):
+        raise
 
 
 def parse_deribit_instrument(name: str) -> dict[str, Any] | None:
@@ -64,12 +60,13 @@ def parse_deribit_instrument(name: str) -> dict[str, Any] | None:
     if len(parts) != 4:
         return None
     asset, expiry_text, strike_text, option_type = parts
-    if len(expiry_text) < 6:
+    match = re.fullmatch(r"(\d{1,2})([A-Z]{3})(\d{2})", expiry_text.upper())
+    if not match:
         return None
     try:
-        day = int(expiry_text[:2])
-        month = MONTHS[expiry_text[2:5].upper()]
-        year = 2000 + int(expiry_text[5:])
+        day = int(match.group(1))
+        month = MONTHS[match.group(2)]
+        year = 2000 + int(match.group(3))
         strike = float(strike_text)
     except (KeyError, TypeError, ValueError):
         return None
@@ -98,9 +95,9 @@ def _normalized_iv(value: Any) -> float | None:
         return None
     if vol <= 0:
         return None
-    if vol > 3.0:
+    if vol > 10.0:
         vol /= 100.0
-    return max(0.05, min(2.5, vol))
+    return max(0.01, min(5.0, vol))
 
 
 def select_atm_iv(

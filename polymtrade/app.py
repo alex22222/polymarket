@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from polymtrade.data.crypto_prices import fetch_best_daily
+from polymtrade.data.macro_events import macro_context
 from polymtrade.data.polymarket_api import (
     fetch_gamma_markets,
     fetch_polymtrade_crypto_events,
@@ -48,6 +49,20 @@ ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
 DB_PATH = ROOT.parent / "polymtrade.sqlite"
 VERSION_PATH = ROOT.parent / ".deploy_version.json"
+
+
+def query_int(query: dict, name: str, default: int) -> int:
+    value = query.get(name, [default])[0]
+    if value in (None, ""):
+        return default
+    return int(value)
+
+
+def query_float(query: dict, name: str, default: float) -> float:
+    value = query.get(name, [default])[0]
+    if value in (None, ""):
+        return default
+    return float(value)
 
 
 def version_info() -> dict:
@@ -291,6 +306,10 @@ class AppHandler(SimpleHTTPRequestHandler):
             with connect(DB_PATH) as conn:
                 self.send_json(automation_health(conn, max_age_minutes=max_age))
             return
+        if path == "/api/macro-events":
+            horizon_hours = query_float(query, "horizon_hours", 720.0)
+            self.send_json(macro_context(horizon_hours=horizon_hours))
+            return
         if path == "/api/candles":
             asset = query.get("asset", ["BTC"])[0].upper()
             source = query.get("source", [None])[0]
@@ -299,23 +318,23 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json({"asset": asset, "candles": candles_for_asset(conn, asset, source, limit)})
             return
         if path == "/api/scanner":
-            limit = int(query.get("limit", ["50"])[0])
-            edge_threshold = float(query.get("edge", ["0.02"])[0])
-            min_liquidity = float(query.get("min_liquidity", ["500"])[0])
-            simulations = int(query.get("simulations", ["1500"])[0])
+            limit = query_int(query, "limit", 50)
+            edge_threshold = query_float(query, "edge", 0.02)
+            min_liquidity = query_float(query, "min_liquidity", 500.0)
+            simulations = query_int(query, "simulations", 1500)
             vol_window = query.get("vol_window", ["90d"])[0]
             vol_model = query.get("vol_model", ["factor"])[0]
-            iv_timeout = int(query.get("iv_timeout", ["3"])[0])
+            iv_timeout = query_int(query, "iv_timeout", 3)
             orderbook = query.get("orderbook", ["0"])[0] in {"1", "true", "yes"}
-            book_limit = int(query.get("book_limit", ["30"])[0])
-            executable_notional = float(query.get("executable_notional", ["100"])[0])
-            book_timeout = int(query.get("book_timeout", ["4"])[0])
-            max_book_age_seconds = int(query.get("max_book_age_seconds", ["120"])[0])
-            max_spread = float(query.get("max_spread", ["0.04"])[0])
+            book_limit = query_int(query, "book_limit", 30)
+            executable_notional = query_float(query, "executable_notional", 100.0)
+            book_timeout = query_int(query, "book_timeout", 4)
+            max_book_age_seconds = query_int(query, "max_book_age_seconds", 120)
+            max_spread = query_float(query, "max_spread", 0.04)
             realtime_spot = query.get("spot", ["realtime"])[0] != "daily"
             require_realtime_spot = query.get("require_realtime_spot", ["1"])[0] in {"1", "true", "yes"}
-            spot_timeout = int(query.get("spot_timeout", ["4"])[0])
-            min_expiry_minutes = int(query.get("min_expiry_minutes", ["30"])[0])
+            spot_timeout = query_int(query, "spot_timeout", 4)
+            min_expiry_minutes = query_int(query, "min_expiry_minutes", 30)
             self.log_event("INFO", "scanner", f"Scanner started: limit={limit}, edge={edge_threshold}, vol={vol_window}")
             with connect(DB_PATH) as conn:
                 try:

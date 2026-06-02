@@ -178,6 +178,9 @@ create index if not exists idx_scanner_observation_runs_created_at on scanner_ob
 def connect(path: str | Path = "polymtrade.sqlite") -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.execute("pragma busy_timeout = 5000")
+    conn.execute("pragma journal_mode = wal")
+    conn.execute("pragma synchronous = normal")
     conn.executescript(SCHEMA)
     ensure_schema(conn)
     return conn

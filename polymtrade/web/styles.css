@@ -193,7 +193,11 @@ h2 {
 .health-section,
 .observation-section,
 .quality-section,
+.macro-section,
+.calibration-section,
 .paper-section,
+.position-section,
+.candidate-review-section,
 .price-panel,
 .coverage-panel {
   background: var(--panel);
@@ -238,7 +242,11 @@ h2 {
 .health-section,
 .observation-section,
 .quality-section,
+.macro-section,
+.calibration-section,
 .paper-section,
+.position-section,
+.candidate-review-section,
 .price-panel,
 .coverage-panel {
   padding: 18px;
@@ -313,6 +321,13 @@ canvas {
 }
 
 .paper-section {
+  margin-top: 16px;
+}
+
+.macro-section,
+.calibration-section,
+.position-section,
+.candidate-review-section {
   margin-top: 16px;
 }
 
@@ -627,6 +642,37 @@ canvas {
 .attribution-rows {
   display: grid;
   gap: 10px;
+}
+
+.macro-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.macro-row {
+  background: #fbfcfa;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.macro-row strong {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.macro-row span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.macro-row strong span {
+  color: var(--ink);
+  font-size: 15px;
 }
 
 .attribution-row {
