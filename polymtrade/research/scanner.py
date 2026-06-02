@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 from polymtrade.data.derivatives import fetch_deribit_option_summaries, select_atm_iv
 from polymtrade.data.crypto_prices import (
@@ -31,6 +33,8 @@ SOURCE_PRIORITY = {
     "okx": 2,
     "coinbase": 3,
 }
+
+POLYMTRADE_BASE_URL = "https://polym.trade/"
 
 
 def float_or_none(value: Any) -> float | None:
@@ -364,6 +368,45 @@ def scanner_markets(conn) -> list[dict[str, Any]]:
         """
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def market_link(market: dict[str, Any]) -> dict[str, Any]:
+    event_id = str(market.get("event_id") or "").strip()
+    event_slug = str(market.get("event_slug") or "").strip()
+    if (not event_id or not event_slug) and market.get("raw_json"):
+        try:
+            raw = json.loads(str(market.get("raw_json") or "{}"))
+            events = raw.get("events")
+            event = events[0] if isinstance(events, list) and events and isinstance(events[0], dict) else {}
+            event_id = event_id or str(event.get("id") or "").strip()
+            event_slug = event_slug or str(event.get("slug") or "").strip()
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    market_id = str(market.get("market_id") or "").strip()
+    slug = str(market.get("slug") or "").strip()
+    if not event_slug:
+        question = str(market.get("question") or "")
+        asset_slug = {"BTC": "bitcoin", "ETH": "ethereum"}.get(str(market.get("asset") or "").upper())
+        if asset_slug and re.search(r"(?:may 1-)?june 7|june 1-7", question, re.IGNORECASE):
+            event_slug = f"what-price-will-{asset_slug}-hit-june-1-7-2026"
+    if event_id or event_slug:
+        params = {"eventSource": "polymarket"}
+        if event_id:
+            params["eventId"] = event_id
+        if event_slug:
+            params["eventSlug"] = event_slug
+        return {
+            "market_slug": slug or None,
+            "event_id": event_id or None,
+            "event_slug": event_slug or None,
+            "market_url": f"{POLYMTRADE_BASE_URL}?{urlencode(params)}",
+            "market_url_source": "event",
+        }
+    return {
+        "market_slug": None,
+        "market_url": f"{POLYMTRADE_BASE_URL}?category=crypto",
+        "market_url_source": "category",
+    }
 
 
 def normalized_direction(market: dict[str, Any]) -> str:
@@ -737,6 +780,7 @@ def scan_opportunities(
         opportunities.append(
             {
                 "market_id": market["market_id"],
+                **market_link(market),
                 "asset": market["asset"],
                 "question": market["question"],
                 "direction": direction,

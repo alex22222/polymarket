@@ -68,6 +68,8 @@ create table if not exists candle_anomaly_reviews (
 
 create table if not exists barrier_markets (
   market_id text primary key,
+  event_id text,
+  event_slug text,
   question text not null,
   asset text not null,
   barrier real not null,
@@ -190,6 +192,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     existing = {row["name"] for row in conn.execute("pragma table_info(barrier_markets)").fetchall()}
     additions = {
         "slug": "text",
+        "event_id": "text",
+        "event_slug": "text",
         "end_date": "text",
         "active": "integer",
         "closed": "integer",
@@ -643,14 +647,16 @@ def upsert_barrier_markets(conn: sqlite3.Connection, markets: list[dict[str, Any
     conn.executemany(
         """
         insert or replace into barrier_markets (
-          market_id, question, asset, barrier, direction, deadline_text, slug, end_date,
+          market_id, event_id, event_slug, question, asset, barrier, direction, deadline_text, slug, end_date,
           active, closed, yes_token_id, no_token_id, yes_price, no_price, volume,
           liquidity, source, raw_json
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
                 item["market_id"],
+                item.get("event_id"),
+                item.get("event_slug"),
                 item["question"],
                 item["asset"],
                 item["barrier"],
@@ -670,6 +676,57 @@ def upsert_barrier_markets(conn: sqlite3.Connection, markets: list[dict[str, Any
                 item.get("raw_json"),
             )
             for item in markets
+        ],
+    )
+    conn.executemany(
+        """
+        update barrier_markets
+        set event_id = coalesce(nullif(event_id, ''), ?),
+            event_slug = coalesce(nullif(event_slug, ''), ?)
+        where slug = ?
+          and ? is not null
+          and ? != ''
+        """,
+        [
+            (
+                item.get("event_id"),
+                item.get("event_slug"),
+                item.get("slug"),
+                item.get("event_id") or item.get("event_slug"),
+                item.get("slug") or "",
+            )
+            for item in markets
+            if item.get("slug") and (item.get("event_id") or item.get("event_slug"))
+        ],
+    )
+    conn.executemany(
+        """
+        update barrier_markets
+        set event_id = coalesce(nullif(event_id, ''), ?),
+            event_slug = coalesce(nullif(event_slug, ''), ?)
+        where asset = ?
+          and direction = ?
+          and abs(barrier - ?) < 0.000001
+          and coalesce(end_date, '') = coalesce(?, '')
+          and ? is not null
+          and ? != ''
+        """,
+        [
+            (
+                item.get("event_id"),
+                item.get("event_slug"),
+                item.get("asset"),
+                item.get("direction"),
+                float(item.get("barrier")),
+                item.get("end_date"),
+                item.get("event_id") or item.get("event_slug"),
+                item.get("asset") or "",
+            )
+            for item in markets
+            if item.get("asset")
+            and item.get("direction")
+            and item.get("barrier") is not None
+            and (item.get("event_id") or item.get("event_slug"))
         ],
     )
     conn.commit()

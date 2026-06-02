@@ -112,8 +112,12 @@ def record_from_gamma_market(market: dict[str, Any], source: str = "gamma") -> d
         return None
     yes_token_id, no_token_id, yes_price, no_price = extract_yes_no(market)
     market_id = str(market.get("id") or market.get("conditionId") or market.get("slug") or question)
+    events = market.get("events")
+    event = events[0] if isinstance(events, list) and events and isinstance(events[0], dict) else {}
     return {
         "market_id": market_id,
+        "event_id": str(event.get("id") or market.get("eventId") or ""),
+        "event_slug": str(event.get("slug") or market.get("eventSlug") or ""),
         "question": question,
         "asset": parsed.asset,
         "barrier": parsed.barrier,
@@ -222,7 +226,16 @@ def search_polymtrade_barrier_markets(
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for query in queries or ["bitcoin hit", "ethereum hit"]:
+    for query in queries or [
+        "bitcoin hit",
+        "bitcoin dip",
+        "bitcoin reach",
+        "bitcoin price",
+        "ethereum hit",
+        "ethereum dip",
+        "ethereum reach",
+        "ethereum price",
+    ]:
         data = get_json(
             POLYMTRADE_PUBLIC_SEARCH_URL,
             {
@@ -261,7 +274,23 @@ def fetch_polymtrade_crypto_events(limit: int = 20, timeout: int = 30, retries: 
 
 
 def records_from_gamma_payload(payload: Any, source: str) -> list[dict[str, Any]]:
-    if isinstance(payload, dict):
+    if isinstance(payload, dict) and isinstance(payload.get("events"), list):
+        markets = []
+        for event in payload["events"]:
+            if not isinstance(event, dict):
+                continue
+            event_id = event.get("id")
+            event_slug = event.get("slug")
+            for market in event.get("markets") or []:
+                if not isinstance(market, dict):
+                    continue
+                enriched = {**market}
+                if event_id:
+                    enriched.setdefault("eventId", event_id)
+                if event_slug:
+                    enriched.setdefault("eventSlug", event_slug)
+                markets.append(enriched)
+    elif isinstance(payload, dict):
         for key in ("markets", "data", "results"):
             if isinstance(payload.get(key), list):
                 markets = payload[key]

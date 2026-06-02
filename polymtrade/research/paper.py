@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import urlencode
 
 from polymtrade.research.scanner import order_book_metrics, parse_datetime, preferred_price_source
 
@@ -11,7 +11,7 @@ CURRENT_RULES_FROM = datetime(2026, 5, 26, tzinfo=timezone.utc)
 DEFAULT_MAX_DAYS_TO_EXPIRY = 14.0
 DEFAULT_MAX_SPREAD = 0.04
 DEFAULT_MAX_BOOK_AGE_SECONDS = 120.0
-POLYMTRADE_EVENT_BASE_URL = "https://polym.trade/event"
+POLYMTRADE_BASE_URL = "https://polym.trade/"
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -173,23 +173,46 @@ def _risk_panel(row: dict[str, Any], now: datetime, stake: float, price: float, 
 
 
 def _market_link(conn, market_id: str | None, question: str | None) -> dict[str, Any]:
+    market_id = str(market_id or "").strip()
     if market_id:
         row = conn.execute(
-            "select slug, question from barrier_markets where market_id = ?",
+            "select slug, event_id, event_slug, raw_json, question from barrier_markets where market_id = ?",
             (market_id,),
         ).fetchone()
-        if row and row["slug"]:
-            slug = str(row["slug"])
+        slug = str(row["slug"] or "").strip() if row else ""
+        event_id = str(row["event_id"] or "").strip() if row and "event_id" in row.keys() else ""
+        event_slug = str(row["event_slug"] or "").strip() if row and "event_slug" in row.keys() else ""
+        if row and (not event_id or not event_slug):
+            try:
+                raw = json.loads(str(row["raw_json"] or "{}"))
+                events = raw.get("events")
+                event = events[0] if isinstance(events, list) and events and isinstance(events[0], dict) else {}
+                event_id = event_id or str(event.get("id") or "").strip()
+                event_slug = event_slug or str(event.get("slug") or "").strip()
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+        if event_id or event_slug:
+            params = {"eventSource": "polymarket"}
+            if event_id:
+                params["eventId"] = event_id
+            if event_slug:
+                params["eventSlug"] = event_slug
             return {
-                "market_slug": slug,
-                "market_url": f"{POLYMTRADE_EVENT_BASE_URL}/{slug}",
-                "market_url_source": "slug",
+                "market_slug": slug or None,
+                "event_id": event_id or None,
+                "event_slug": event_slug or None,
+                "market_url": f"{POLYMTRADE_BASE_URL}?{urlencode(params)}",
+                "market_url_source": "event",
             }
-    query = question or market_id or ""
+        return {
+            "market_slug": slug or None,
+            "market_url": f"{POLYMTRADE_BASE_URL}?category=crypto",
+            "market_url_source": "category",
+        }
     return {
         "market_slug": None,
-        "market_url": f"https://polym.trade/search?q={quote_plus(query)}" if query else None,
-        "market_url_source": "search" if query else "missing",
+        "market_url": f"{POLYMTRADE_BASE_URL}?category=crypto" if (question or market_id) else None,
+        "market_url_source": "category" if (question or market_id) else "missing",
     }
 
 

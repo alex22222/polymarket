@@ -1066,6 +1066,12 @@ function renderCandidateReview(data = {}) {
     .join("");
 }
 
+function questionCell(row) {
+  const tradeLink = row.market_url ? externalLink(row.market_url, "打开 Polymtrade") : "";
+  const sourceNote = row.market_url_source === "category" ? `<small>未找到事件参数，打开 crypto 列表</small>` : "";
+  return `${escapeHtml(row.question)}${tradeLink}${sourceNote}`;
+}
+
 function sortValue(row, field) {
   if (field === "action") {
     const order = { candidate: 0, verify: 1, watch: 2, avoid: 3 };
@@ -1152,7 +1158,7 @@ function renderScanner(data) {
           <td class="review-cell">${tierCell(row)}</td>
           <td class="review-cell">${reviewCell(row)}</td>
           <td>${escapeHtml(row.asset)}</td>
-          <td class="question">${escapeHtml(row.question)}</td>
+          <td class="question">${questionCell(row)}</td>
           <td>${row.direction === "hit_below" ? "下破" : "上破"}</td>
           <td>${money(row.spot)}</td>
           <td>${money(row.barrier)}</td>
