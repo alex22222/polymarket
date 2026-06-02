@@ -104,6 +104,7 @@ let lastPrices = [];
 let lastScanner = null;
 let scannerSort = { field: null, dir: "asc" };
 let activeView = "overview";
+let activeValidationPanel = "positions";
 
 function percent(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
@@ -279,6 +280,18 @@ function contextFactorLabel(context) {
   return `${shortLabel} · ${fundingLabel} · ${oiLabel} · ${activeMacro}${signals ? ` · ${signals}` : ""}`;
 }
 
+function renderValidationPanel() {
+  const allowedPanels = new Set(["positions", "paper", "review", "calibration", "quality", "observations"]);
+  if (!allowedPanels.has(activeValidationPanel)) activeValidationPanel = "positions";
+  document.querySelectorAll("[data-validation-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.validationTab === activeValidationPanel);
+  });
+  document.querySelectorAll("[data-validation-panel]").forEach((section) => {
+    const isVisible = activeView === "validation" && section.dataset.validationPanel === activeValidationPanel;
+    section.classList.toggle("hidden", !isVisible);
+  });
+}
+
 function setActiveView(view) {
   const legacyViews = { analysis: "validation", research: "validation" };
   view = legacyViews[view] || view;
@@ -288,15 +301,34 @@ function setActiveView(view) {
     button.classList.toggle("active", button.dataset.viewTab === activeView);
   });
   document.querySelectorAll(".view-section").forEach((section) => {
+    if (section.dataset.validationPanel) return;
     section.classList.toggle("hidden", section.dataset.view !== activeView);
   });
-  window.location.hash = activeView;
+  renderValidationPanel();
+  window.location.hash = activeView === "validation" ? `validation:${activeValidationPanel}` : activeView;
   if (activeView === "overview") {
     drawPriceChart(lastPrices);
   }
   if (activeView === "scanner") {
     drawEdgeChart(lastScanner?.opportunities || []);
   }
+}
+
+function setActiveValidationPanel(panel) {
+  activeValidationPanel = panel;
+  if (activeView !== "validation") {
+    setActiveView("validation");
+    return;
+  }
+  renderValidationPanel();
+  window.location.hash = `validation:${activeValidationPanel}`;
+}
+
+function initialViewFromHash() {
+  const raw = (window.location.hash || "#overview").replace("#", "");
+  const [view, panel] = raw.split(":");
+  if (panel) activeValidationPanel = panel;
+  return view;
 }
 
 function drawPriceChart(candles) {
@@ -706,13 +738,58 @@ function impactPill(impact) {
   return `<span class="pill neutral-pill">低影响</span>`;
 }
 
+const macroTypeLabels = {
+  cpi: "通胀",
+  fomc: "美联储",
+  employment: "就业",
+  gdp: "GDP",
+  macro: "宏观",
+};
+
+const macroTitleTranslations = {
+  "US Employment Situation": "美国就业报告",
+  "US CPI": "美国 CPI 通胀数据",
+  "FOMC Statement": "美联储 FOMC 利率声明",
+  "FOMC Press Conference": "美联储主席新闻发布会",
+  "US GDP": "美国 GDP 数据",
+};
+
+const macroNoteTranslations = {
+  "Monthly nonfarm payrolls and unemployment rate.": "月度非农就业和失业率数据，通常会影响美元、利率预期和风险资产。",
+  "Monthly CPI release; can raise short-term jump risk.": "月度通胀数据，可能改变降息预期，并提高 BTC / ETH 短时跳变风险。",
+  "Policy statement and rate decision.": "利率决议和政策声明，直接影响美元流动性、收益率和风险偏好。",
+  "Chair press conference; can move rates, USD, equities, and crypto.": "主席问答可能引发利率、美元、美股和加密资产的二次波动。",
+  "GDP release; lower immediate crypto impact than CPI/FOMC/NFP.": "经济增长数据，通常短线冲击低于 CPI、FOMC 和非农，但会影响宏观叙事。",
+};
+
+function macroTitle(event) {
+  return event.title_zh || macroTitleTranslations[event.title] || event.title || "--";
+}
+
+function macroNotes(event) {
+  return event.notes_zh || macroNoteTranslations[event.notes] || event.notes || "";
+}
+
+function macroTypeLabel(type) {
+  return macroTypeLabels[type] || type || "宏观";
+}
+
+function formatMacroDistance(hoursUntil) {
+  const value = Number(hoursUntil);
+  if (!Number.isFinite(value)) return "--";
+  const days = value / 24;
+  if (Math.abs(days) < 0.05) return value >= 0 ? "今天" : "刚过去";
+  if (days < 0) return `已过 ${Math.abs(days).toFixed(1)} 天`;
+  return `${days.toFixed(1)} 天`;
+}
+
 function renderMacroEvents(data = {}) {
   const events = data.upcoming || [];
   const active = data.active || [];
-  const highImpact = events.filter((event) => event.impact === "high").length;
+  const highImpact = [...events, ...active].filter((event) => event.impact === "high").length;
   if (els.macroMeta) {
     const generated = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--";
-    els.macroMeta.textContent = `未来 ${Number(data.horizon_hours || 0).toFixed(0)}h · 生成 ${generated}`;
+    els.macroMeta.textContent = `未来 ${(Number(data.horizon_hours || 0) / 24).toFixed(0)} 天 · 生成 ${generated}`;
   }
   if (els.macroActive) els.macroActive.textContent = active.length;
   if (els.macroUpcoming) els.macroUpcoming.textContent = events.length;
@@ -723,20 +800,32 @@ function renderMacroEvents(data = {}) {
     els.macroRows.innerHTML = `<div class="coverage-row"><strong>暂无宏观事件</strong><span>当前窗口内没有配置的 CPI / FOMC / 非农 / GDP。</span></div>`;
     return;
   }
-  const rows = [...active.map((event) => ({ ...event, active: true })), ...events.map((event) => ({ ...event, active: false }))];
+  const rowMap = new Map();
+  [...events.map((event) => ({ ...event, active: false })), ...active.map((event) => ({ ...event, active: true }))].forEach((event) => {
+    rowMap.set(event.id || `${event.title}-${event.scheduled_at}`, event);
+  });
+  const rows = Array.from(rowMap.values()).sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return Number(a.hours_until || 0) - Number(b.hours_until || 0);
+  });
   els.macroRows.innerHTML = rows
     .map((event) => {
       const at = event.scheduled_at ? new Date(event.scheduled_at).toLocaleString("zh-CN") : "--";
-      const hours = Number.isFinite(Number(event.hours_until)) ? `${Number(event.hours_until).toFixed(1)}h` : "--";
+      const distance = formatMacroDistance(event.hours_until);
+      const title = macroTitle(event);
+      const notes = macroNotes(event);
+      const sourceSummary = event.source_summary_zh || "";
+      const sourceLabel = event.source ? `来源：${event.source}` : "来源：manual";
       return `
         <div class="macro-row">
           <strong>
-            <span>${escapeHtml(event.title || "--")}</span>
+            <span>${escapeHtml(title)}</span>
             ${impactPill(event.impact)}
           </strong>
-          <span>${event.active ? "活跃窗口" : "未来事件"} · ${escapeHtml(event.type || "macro")} · 距离 ${escapeHtml(hours)}</span>
-          <span>${escapeHtml(at)} · ${escapeHtml(event.source || "manual")}</span>
-          <span>${escapeHtml(event.notes || "")}</span>
+          <span>${event.active ? "活跃窗口" : "未来事件"} · ${escapeHtml(macroTypeLabel(event.type))} · 距离 ${escapeHtml(distance)}</span>
+          <span>${escapeHtml(at)} · ${escapeHtml(sourceLabel)} ${externalLink(event.source_url, "官方链接")}</span>
+          <span>${escapeHtml(notes)}</span>
+          ${sourceSummary ? `<span>${escapeHtml(sourceSummary)}</span>` : ""}
         </div>
       `;
     })
@@ -1458,6 +1547,10 @@ document.querySelectorAll(".view-tab").forEach((button) => {
   button.addEventListener("click", () => setActiveView(button.dataset.viewTab));
 });
 
+document.querySelectorAll("[data-validation-tab]").forEach((button) => {
+  button.addEventListener("click", () => setActiveValidationPanel(button.dataset.validationTab));
+});
+
 document.querySelectorAll(".asset-toggle").forEach((button) => {
   button.addEventListener("click", async () => {
     selectedAsset = button.dataset.asset;
@@ -1470,5 +1563,5 @@ window.addEventListener("resize", () => {
   drawPriceChart(lastPrices);
   drawEdgeChart(lastScanner?.opportunities || []);
 });
-setActiveView((window.location.hash || "#overview").replace("#", ""));
+setActiveView(initialViewFromHash());
 loadDashboard();

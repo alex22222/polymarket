@@ -191,6 +191,7 @@ h2 {
 .scanner-section,
 .data-section,
 .health-section,
+.validation-nav-section,
 .observation-section,
 .quality-section,
 .macro-section,
@@ -240,6 +241,7 @@ h2 {
 .scanner-section,
 .data-section,
 .health-section,
+.validation-nav-section,
 .observation-section,
 .quality-section,
 .macro-section,
@@ -310,6 +312,39 @@ canvas {
 
 .health-section {
   margin-top: 16px;
+}
+
+.validation-nav-section {
+  margin-top: 16px;
+  padding: 10px;
+}
+
+.sub-tabs {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(108px, 1fr));
+  gap: 8px;
+}
+
+.sub-tab {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  min-height: 36px;
+  background: #f6f7f4;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.sub-tab.active {
+  background: var(--blue);
+  color: #fff;
+}
+
+.sub-tab:not(.active):hover {
+  border-color: var(--line);
+  background: #fff;
+  color: var(--ink);
 }
 
 .observation-section {
@@ -1051,6 +1086,7 @@ td small {
 
   .metrics,
   .view-tabs,
+  .sub-tabs,
   .workspace,
   .data-grid,
   .data-quality-rows,
@@ -1075,6 +1111,10 @@ td small {
   .view-tabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .sub-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 560px) {
@@ -1097,6 +1137,10 @@ td small {
 
   .view-tabs {
     grid-template-columns: 1fr;
+  }
+
+  .sub-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

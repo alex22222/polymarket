@@ -5,67 +5,91 @@
       "id": "2026-06-05-us-employment",
       "type": "employment",
       "title": "US Employment Situation",
+      "title_zh": "美国就业报告",
       "scheduled_at": "2026-06-05T12:30:00+00:00",
       "impact": "high",
       "pre_window_hours": 24,
       "post_window_hours": 6,
       "source": "BLS release schedule",
-      "notes": "Monthly nonfarm payrolls and unemployment rate."
+      "source_url": "https://www.bls.gov/schedule/news_release/empsit.htm",
+      "source_summary_zh": "美国劳工统计局就业报告发布时间表。",
+      "notes": "Monthly nonfarm payrolls and unemployment rate.",
+      "notes_zh": "月度非农就业和失业率数据，通常会影响美元、利率预期和风险资产。"
     },
     {
       "id": "2026-06-10-us-cpi",
       "type": "cpi",
       "title": "US CPI",
+      "title_zh": "美国 CPI 通胀数据",
       "scheduled_at": "2026-06-10T12:30:00+00:00",
       "impact": "high",
       "pre_window_hours": 24,
       "post_window_hours": 8,
       "source": "BLS CPI release schedule",
-      "notes": "Monthly CPI release; can raise short-term jump risk."
+      "source_url": "https://www.bls.gov/schedule/news_release/cpi.htm",
+      "source_summary_zh": "美国劳工统计局 CPI 新闻发布时间表。",
+      "notes": "Monthly CPI release; can raise short-term jump risk.",
+      "notes_zh": "月度通胀数据，可能改变降息预期，并提高 BTC / ETH 短时跳变风险。"
     },
     {
       "id": "2026-06-17-fomc-statement",
       "type": "fomc",
       "title": "FOMC Statement",
+      "title_zh": "美联储 FOMC 利率声明",
       "scheduled_at": "2026-06-17T18:00:00+00:00",
       "impact": "high",
       "pre_window_hours": 48,
       "post_window_hours": 12,
       "source": "Federal Reserve FOMC calendar",
-      "notes": "Policy statement and rate decision."
+      "source_url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "source_summary_zh": "美联储 FOMC 会议与声明日历。",
+      "notes": "Policy statement and rate decision.",
+      "notes_zh": "利率决议和政策声明，直接影响美元流动性、收益率和风险偏好。"
     },
     {
       "id": "2026-06-17-fomc-press",
       "type": "fomc",
       "title": "FOMC Press Conference",
+      "title_zh": "美联储主席新闻发布会",
       "scheduled_at": "2026-06-17T18:30:00+00:00",
       "impact": "high",
       "pre_window_hours": 48,
       "post_window_hours": 12,
       "source": "Federal Reserve FOMC calendar",
-      "notes": "Chair press conference; can move rates, USD, equities, and crypto."
+      "source_url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "source_summary_zh": "美联储 FOMC 会议与主席发布会日历。",
+      "notes": "Chair press conference; can move rates, USD, equities, and crypto.",
+      "notes_zh": "主席问答可能引发利率、美元、美股和加密资产的二次波动。"
     },
     {
       "id": "2026-06-25-us-gdp",
       "type": "gdp",
       "title": "US GDP",
+      "title_zh": "美国 GDP 数据",
       "scheduled_at": "2026-06-25T12:30:00+00:00",
       "impact": "medium",
       "pre_window_hours": 12,
       "post_window_hours": 4,
       "source": "BEA release schedule",
-      "notes": "GDP release; lower immediate crypto impact than CPI/FOMC/NFP."
+      "source_url": "https://www.bea.gov/news/schedule",
+      "source_summary_zh": "美国经济分析局新闻发布时间表。",
+      "notes": "GDP release; lower immediate crypto impact than CPI/FOMC/NFP.",
+      "notes_zh": "经济增长数据，通常短线冲击低于 CPI、FOMC 和非农，但会影响宏观叙事。"
     },
     {
       "id": "2026-07-29-fomc-statement",
       "type": "fomc",
       "title": "FOMC Statement",
+      "title_zh": "美联储 FOMC 利率声明",
       "scheduled_at": "2026-07-29T18:00:00+00:00",
       "impact": "high",
       "pre_window_hours": 48,
       "post_window_hours": 12,
       "source": "Federal Reserve FOMC calendar",
-      "notes": "Policy statement and rate decision."
+      "source_url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "source_summary_zh": "美联储 FOMC 会议与声明日历。",
+      "notes": "Policy statement and rate decision.",
+      "notes_zh": "利率决议和政策声明，直接影响美元流动性、收益率和风险偏好。"
     }
   ]
 }

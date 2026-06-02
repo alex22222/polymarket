@@ -49,7 +49,11 @@ def load_macro_events(path: Path = EVENTS_PATH) -> list[dict[str, Any]]:
                 "pre_window_hours": float(event.get("pre_window_hours") or 24),
                 "post_window_hours": float(event.get("post_window_hours") or 6),
                 "source": str(event.get("source") or "manual"),
+                "source_url": str(event.get("source_url") or ""),
                 "notes": str(event.get("notes") or ""),
+                "title_zh": str(event.get("title_zh") or ""),
+                "notes_zh": str(event.get("notes_zh") or ""),
+                "source_summary_zh": str(event.get("source_summary_zh") or ""),
             }
         )
     return sorted(normalized, key=lambda item: item["scheduled_at"])
@@ -99,7 +103,10 @@ def macro_risk_for_market(now: datetime, end_at: datetime | None, limit: int = 4
             relevant.append({**event, "hours_until": (scheduled_at - now).total_seconds() / 3600})
         elif -post_seconds <= (scheduled_at - now).total_seconds() <= 0:
             relevant.append({**event, "hours_until": (scheduled_at - now).total_seconds() / 3600})
-    labels = [f"{event['title']} {event['hours_until']:.1f}h" for event in relevant[:limit]]
+    labels = [
+        f"{event.get('title_zh') or event['title']} {event['hours_until'] / 24:.1f}d"
+        for event in relevant[:limit]
+    ]
     high_events = [event for event in relevant if event.get("impact") == "high" or event.get("type") in HIGH_IMPACT_TYPES]
     if high_events:
         risk_level = "high"
