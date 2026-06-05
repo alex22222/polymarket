@@ -231,6 +231,25 @@ function modelCell(row) {
   const source = row.annual_vol_source || "rv";
   const vol = Number.isFinite(Number(row.annual_vol)) ? percent(row.annual_vol) : "--";
   const iv = row.vol_components?.iv ? ` · IV ${percent(row.vol_components.iv)}` : "";
+  const macroMultiplier = Number(row.vol_components?.macro_multiplier || 1);
+  const macroVol = Number.isFinite(macroMultiplier) && macroMultiplier > 1 ? ` · macro×${macroMultiplier.toFixed(2)}` : "";
+  const ciLow = Number(row.model_probability_ci_low);
+  const ciHigh = Number(row.model_probability_ci_high);
+  const edgeCiLow = Number(row.net_edge_ci_low);
+  const edgeCiHigh = Number(row.net_edge_ci_high);
+  const probabilityCi = Number.isFinite(ciLow) && Number.isFinite(ciHigh) && Math.abs(ciHigh - ciLow) > 0.000001
+    ? `CI ${percent(ciLow)}-${percent(ciHigh)}`
+    : "";
+  const mcProbability = Number(row.mc_probability);
+  const mcDiff = Number(row.mc_probability_diff);
+  const mcText = Number.isFinite(mcProbability)
+    ? `MC ${percent(mcProbability)}${Number.isFinite(mcDiff) ? ` Δ${signedPercentText(mcDiff)}` : ""}`
+    : "";
+  const drift = Number(row.drift);
+  const driftText = Number.isFinite(drift) && Math.abs(drift) > 0.001 ? `drift ${signedPercentText(drift)}` : "";
+  const edgeCi = Number.isFinite(edgeCiLow) && Number.isFinite(edgeCiHigh)
+    ? `edgeCI ${signedPercentText(edgeCiLow)}-${signedPercentText(edgeCiHigh)}`
+    : "";
   const state = row.market_state || {};
   const short = state.short_term?.["5m"] || {};
   const funding = state.funding || {};
@@ -246,7 +265,7 @@ function modelCell(row) {
     `OI ${signedPercentText(oi.open_interest_change)}`,
   ].join(" · ");
   const macroText = macro.risk_level && macro.risk_level !== "normal" ? `macro ${macro.risk_level}${macroLabels ? ` · ${macroLabels}` : ""}` : "";
-  return `${percent(row.model_probability)}<small>${escapeHtml(source)} · vol ${vol}${iv}</small><small>${escapeHtml(factors)}</small>${tags ? `<small>${escapeHtml(tags)}</small>` : ""}${macroText ? `<small>${escapeHtml(macroText)}</small>` : ""}`;
+  return `${percent(row.model_probability)}<small>${escapeHtml(row.model_probability_method || "model")} · ${escapeHtml(source)} · vol ${vol}${iv}${macroVol}</small>${probabilityCi || edgeCi ? `<small>${escapeHtml([probabilityCi, edgeCi].filter(Boolean).join(" · "))}</small>` : ""}${mcText || driftText ? `<small>${escapeHtml([mcText, driftText].filter(Boolean).join(" · "))}</small>` : ""}<small>${escapeHtml(factors)}</small>${tags ? `<small>${escapeHtml(tags)}</small>` : ""}${macroText ? `<small>${escapeHtml(macroText)}</small>` : ""}`;
 }
 
 function scannerRowsForAsset(asset) {
@@ -1132,18 +1151,20 @@ function renderScanner(data) {
   if (els.scannerNear) els.scannerNear.textContent = summary.near_candidates ?? "--";
   if (els.scannerResearch) els.scannerResearch.textContent = summary.research_opportunities ?? "--";
   els.scannerStatus.textContent = summary.candidates > 0 ? "有候选" : summary.near_candidates > 0 ? "有准候选" : summary.research_opportunities > 0 ? "有研究机会" : "观察";
-  els.scannerMeta.textContent = `${assumptions.vol_window || "90d"} vol · ${assumptions.simulations || 0} paths · 最小到期 ${assumptions.min_expiry_minutes ?? 30}m`;
+  els.scannerMeta.textContent = `${assumptions.model_probability_method || "GBM closed-form"} · ${assumptions.vol_window || "90d"} vol · MC ${assumptions.mc_diagnostic_paths || assumptions.simulations || 0} paths · 最小到期 ${assumptions.min_expiry_minutes ?? 30}m`;
   const contextSources = contextSourceLabel(data.contexts || {});
   els.priceSource.textContent = contextSources || "--";
   const selectedVol = selectedContext?.volatility?.[assumptions.vol_window];
   els.stackData.textContent = contextSources || "无真实价格源";
   const ewmaVol = selectedContext?.ewma_volatility;
+  const drift = Number(selectedContext?.drift_90d);
+  const driftLabel = Number.isFinite(drift) ? ` · drift90 ${signedPercentText(drift)}` : "";
   const ivState = selectedContext?.iv_source ? "Deribit IV on" : selectedContext?.iv_error ? "Deribit IV unavailable" : "IV off";
-  els.stackModel.textContent = `${assumptions.vol_model || "factor"} vol · RV ${assumptions.vol_window || "90d"}${selectedVol ? ` ${percent(selectedVol)}` : ""}${ewmaVol ? ` · EWMA ${percent(ewmaVol)}` : ""} · ${ivState} · ${assumptions.simulations || 0} paths`;
+  els.stackModel.textContent = `GBM closed-form · ${assumptions.vol_model || "factor"} vol · RV ${assumptions.vol_window || "90d"}${selectedVol ? ` ${percent(selectedVol)}` : ""}${ewmaVol ? ` · EWMA ${percent(ewmaVol)}` : ""}${driftLabel} · ${ivState} · MC diag ${assumptions.simulations || 0}`;
   els.stackCost.textContent = `fee ${percent(assumptions.fee_rate)} · slippage ${Number(assumptions.slippage_bps || 0).toFixed(0)} bps · min edge ${percent(assumptions.edge_threshold)} · ${contextFactorLabel(selectedContext)}`;
   els.stackExecution.textContent = assumptions.orderbook
-    ? `盘口 ${summary.orderbook_priced ?? 0}/${assumptions.book_limit} · 过期 ${summary.stale_orderbooks ?? 0} · 部分 ${summary.partial_fills ?? 0} · macro ${summary.macro_risk_rows ?? 0} · 候选 ${summary.candidates ?? 0}`
-    : `cached price · min liquidity ${money(assumptions.min_liquidity)} · macro ${summary.macro_risk_rows ?? 0} · ${summary.candidates ?? 0} candidates`;
+    ? `盘口 ${summary.orderbook_priced ?? 0}/${assumptions.book_limit} · 过期 ${summary.stale_orderbooks ?? 0} · 部分 ${summary.partial_fills ?? 0} · 不确定 ${summary.uncertain_edges ?? 0} · 候选 ${summary.candidates ?? 0}`
+    : `cached price · min liquidity ${money(assumptions.min_liquidity)} · macro ${summary.macro_risk_rows ?? 0}/${summary.macro_vol_adjusted ?? 0} · 不确定 ${summary.uncertain_edges ?? 0}`;
   drawEdgeChart(rows);
   drawPriceChart(lastPrices);
   if (!rows.length) {

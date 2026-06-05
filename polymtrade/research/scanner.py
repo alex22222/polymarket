@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -20,6 +21,7 @@ from polymtrade.data.polymarket_api import fetch_order_book
 from polymtrade.storage.db import connect, data_quality_report
 from polymtrade.superpowers.barrier import (
     BarrierInput,
+    closed_form_touch_probability,
     edge_for_yes,
     ewma_volatility,
     monte_carlo_touch_probability,
@@ -35,6 +37,12 @@ SOURCE_PRIORITY = {
 }
 
 POLYMTRADE_BASE_URL = "https://polym.trade/"
+MACRO_VOL_MULTIPLIERS = {
+    "normal": 1.0,
+    "medium": 1.15,
+    "high": 1.35,
+    "unknown": 1.0,
+}
 
 
 def float_or_none(value: Any) -> float | None:
@@ -62,6 +70,21 @@ def parse_datetime(value: str | None) -> datetime | None:
 def stable_seed(*parts: object) -> int:
     raw = "|".join(str(part) for part in parts).encode("utf-8")
     return int(hashlib.sha256(raw).hexdigest()[:8], 16)
+
+
+def annualized_log_drift(prices: list[float], window: int = 90) -> float:
+    sample = prices[-(window + 1) :]
+    returns: list[float] = []
+    for previous, current in zip(sample, sample[1:]):
+        if previous > 0 and current > 0:
+            returns.append(math.log(current / previous))
+    if not returns:
+        return 0.0
+    return sum(returns) / len(returns) * 365.0
+
+
+def model_drift(raw_drift: float, shrink: float = 0.25, cap: float = 0.50) -> float:
+    return max(-cap, min(cap, raw_drift * shrink))
 
 
 def preferred_price_source(conn, asset: str) -> str | None:
@@ -285,6 +308,8 @@ def price_context(
         prices = closes[-(window + 1) :]
         vols[f"{window}d"] = realized_volatility(prices)
     ewma = ewma_volatility(closes)
+    raw_drift_90d = annualized_log_drift(closes, window=90)
+    drift_90d = model_drift(raw_drift_90d)
     factors = market_state(asset, timeout=spot_timeout, previous=latest_observed_market_state(conn, asset))
     return {
         "asset": asset,
@@ -299,6 +324,8 @@ def price_context(
         "candles": len(ordered),
         "volatility": vols,
         "ewma_volatility": ewma,
+        "raw_drift_90d": raw_drift_90d,
+        "drift_90d": drift_90d,
         "market_state": factors,
     }
 
@@ -351,6 +378,60 @@ def blended_annual_vol(
         "ewma": ewma,
         "iv": None,
         "weights": {"rv": 0.30, "ewma": 0.70, "iv": 0.0},
+    }
+
+
+def apply_macro_vol_adjustment(
+    annual_vol: float,
+    components: dict[str, Any],
+    macro_risk: dict[str, Any],
+    days_to_expiry: float,
+) -> tuple[float, dict[str, Any]]:
+    events = macro_risk.get("events") or []
+    lookahead_days = min(max(days_to_expiry, 0.0), 14.0)
+    near_events = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and float_or_none(event.get("hours_until")) is not None
+        and float(event["hours_until"]) / 24.0 <= lookahead_days
+    ]
+    near_risk_level = "normal"
+    if any(event.get("impact") == "high" or event.get("type") in {"cpi", "fomc", "employment", "gdp"} for event in near_events):
+        near_risk_level = "high"
+    elif near_events:
+        near_risk_level = "medium"
+    raw_multiplier = MACRO_VOL_MULTIPLIERS.get(near_risk_level, 1.0)
+    horizon_weight = min(1.0, 7.0 / max(days_to_expiry, 1.0))
+    multiplier = 1.0 + (raw_multiplier - 1.0) * horizon_weight
+    if multiplier < 1.02:
+        multiplier = 1.0
+    adjusted = max(0.01, min(2.5, annual_vol * multiplier))
+    updated = dict(components)
+    updated["pre_macro_vol"] = annual_vol
+    updated["macro_multiplier"] = multiplier
+    updated["macro_risk_level"] = macro_risk.get("risk_level")
+    updated["macro_multiplier_basis"] = near_risk_level
+    updated["macro_events_weighted"] = len(near_events)
+    if multiplier > 1.0:
+        updated["source"] = f"{components.get('source') or 'vol'}+macro"
+    return adjusted, updated
+
+
+def edge_interval_for_yes(
+    ci_low: float,
+    ci_high: float,
+    ask_price: float,
+    fee_rate: float,
+    slippage_bps: float,
+) -> dict[str, float]:
+    low = edge_for_yes(ci_low, ask_price, fee_rate, slippage_bps)
+    high = edge_for_yes(ci_high, ask_price, fee_rate, slippage_bps)
+    return {
+        "net_edge_ci_low": low["net_ev"],
+        "net_edge_ci_high": high["net_ev"],
+        "roi_ci_low": low["roi"],
+        "roi_ci_high": high["roi"],
     }
 
 
@@ -412,12 +493,7 @@ def market_link(market: dict[str, Any]) -> dict[str, Any]:
 def normalized_direction(market: dict[str, Any]) -> str:
     question = str(market.get("question") or "").lower()
     if (
-        "dip" in question
-        or "below" in question
-        or "under" in question
-        or "drop" in question
-        or "less than" in question
-        or "lower than" in question
+        re.search(r"\b(dip|below|under|drop|less than|lower than)\b", question)
     ):
         return "hit_below"
     return str(market.get("direction") or "hit_above")
@@ -426,6 +502,10 @@ def normalized_direction(market: dict[str, Any]) -> str:
 def is_simple_touch_market(market: dict[str, Any]) -> bool:
     question = str(market.get("question") or "").lower()
     if " first" in question and " or " in question:
+        return False
+    has_down = bool(re.search(r"\b(dip|below|under|drop|less than|lower than)\b", question))
+    has_up = bool(re.search(r"\b(hit|reach|above|over|exceed|greater than|higher than)\b", question))
+    if "before" in question and has_down and has_up:
         return False
     return any(token in question for token in ("hit", "reach", "dip", "drop"))
 
@@ -602,6 +682,21 @@ def add_review(
     else:
         check("edge", "warn", "净 edge 未达阈值")
 
+    row["uncertainty_blocks_candidate"] = False
+    edge_ci_low = float_or_none(row.get("net_edge_ci_low"))
+    edge_ci_high = float_or_none(row.get("net_edge_ci_high"))
+    if edge_ci_low is not None and edge_ci_high is not None:
+        row["edge_ci_crosses_threshold"] = edge_ci_low < edge_threshold <= edge_ci_high
+        if edge_ci_low >= edge_threshold:
+            check("uncertainty", "pass", "95% CI 下沿仍达标")
+        elif row.get("net_edge") is not None and float(row["net_edge"]) >= edge_threshold:
+            row["uncertainty_blocks_candidate"] = True
+            check("uncertainty", "warn", "点估计达标，但 95% CI 下沿未达阈值")
+        elif edge_ci_high > 0:
+            check("uncertainty", "warn", "CI 跨过零轴，仅适合观察复盘")
+        else:
+            check("uncertainty", "pass", "CI 未显示正 edge")
+
     row["review_checks"] = checks
     row["review_blockers"] = blockers
     if row.get("already_touched"):
@@ -613,6 +708,7 @@ def add_review(
     elif (
         row.get("net_edge") is not None
         and float(row["net_edge"]) >= edge_threshold
+        and not row.get("uncertainty_blocks_candidate")
         and (not orderbook_enabled or row.get("pricing_source") == "orderbook")
     ):
         row["action"] = "candidate"
@@ -630,6 +726,10 @@ def assign_opportunity_tier(row: dict[str, Any], edge_threshold: float) -> None:
         row["opportunity_tier"] = "candidate"
         row["opportunity_tier_label"] = "候选"
         row["opportunity_tier_reason"] = "净 edge 达标且盘口复核通过"
+    elif row.get("uncertainty_blocks_candidate") and edge is not None and edge >= edge_threshold:
+        row["opportunity_tier"] = "near"
+        row["opportunity_tier_label"] = "准候选"
+        row["opportunity_tier_reason"] = "点估计达标，但模型置信区间下沿未达阈值"
     elif edge is not None and edge >= max(0.01, edge_threshold * 0.5):
         row["opportunity_tier"] = "near"
         row["opportunity_tier_label"] = "准候选"
@@ -661,7 +761,7 @@ def scan_opportunities(
     conn,
     limit: int = 50,
     edge_threshold: float = 0.02,
-    fee_rate: float = 0.04,
+    fee_rate: float = 0.07,
     slippage_bps: float = 50.0,
     min_liquidity: float = 500.0,
     min_yes_price: float = 0.001,
@@ -756,26 +856,32 @@ def scan_opportunities(
                 days_to_expiry=days_to_expiry,
                 now=now,
             )
+        macro_risk = macro_risk_for_market(now, end_at)
         vol, vol_components = blended_annual_vol(context, vol_window, iv_quote, vol_model)
+        vol, vol_components = apply_macro_vol_adjustment(vol, vol_components, macro_risk, days_to_expiry)
         state = context.get("market_state") or {}
         five_minute = ((state.get("short_term") or {}).get("5m") or {})
         fifteen_minute = ((state.get("short_term") or {}).get("15m") or {})
         funding = state.get("funding") or {}
         open_interest = state.get("open_interest") or {}
-        macro_risk = macro_risk_for_market(now, end_at)
+        drift = float_or_none(context.get("drift_90d")) or 0.0
+        barrier_input = BarrierInput(
+            spot=spot,
+            barrier=barrier,
+            days_to_expiry=days_to_expiry,
+            annual_vol=vol,
+            drift=drift,
+            direction=direction,
+        )
+        closed_probability = closed_form_touch_probability(barrier_input)
         result = monte_carlo_touch_probability(
-            BarrierInput(
-                spot=spot,
-                barrier=barrier,
-                days_to_expiry=days_to_expiry,
-                annual_vol=vol,
-                direction=direction,
-            ),
+            barrier_input,
             simulations=simulations,
             steps_per_day=4,
             seed=stable_seed(market["market_id"], context["spot"], market["barrier"], days_to_expiry, direction),
         )
-        costs = edge_for_yes(result.adjusted_probability, yes_price, fee_rate, slippage_bps)
+        costs = edge_for_yes(closed_probability, yes_price, fee_rate, slippage_bps)
+        edge_interval = edge_interval_for_yes(closed_probability, closed_probability, yes_price, fee_rate, slippage_bps)
         simple_annualized_roi = costs["roi"] * (365.0 / days_to_expiry) if days_to_expiry > 0 else 0.0
         opportunities.append(
             {
@@ -792,9 +898,23 @@ def scan_opportunities(
                 "market_yes_price": yes_price,
                 "market_no_price": market.get("no_price"),
                 "yes_token_id": market.get("yes_token_id"),
-                "model_probability": result.adjusted_probability,
-                "gross_edge": result.adjusted_probability - yes_price,
+                "model_probability": closed_probability,
+                "model_probability_method": "gbm-closed-form",
+                "model_probability_base": closed_probability,
+                "model_probability_se": 0.0,
+                "model_probability_ci_low": closed_probability,
+                "model_probability_ci_high": closed_probability,
+                "model_probability_ci_width": 0.0,
+                "mc_probability": result.adjusted_probability,
+                "mc_probability_base": result.base_probability,
+                "mc_probability_se": result.standard_error,
+                "mc_probability_ci_low": result.ci_low,
+                "mc_probability_ci_high": result.ci_high,
+                "mc_probability_diff": closed_probability - result.adjusted_probability,
+                "drift": drift,
+                "gross_edge": closed_probability - yes_price,
                 "net_edge": costs["net_ev"],
+                **edge_interval,
                 "roi": costs["roi"],
                 "annualized_roi": simple_annualized_roi,
                 "taker_fee": costs["taker_fee"],
@@ -856,9 +976,17 @@ def scan_opportunities(
                 row["pricing_source"] = "cached-orderbook-unavailable"
             else:
                 executable_costs = edge_for_yes(row["model_probability"], float(executable_price), fee_rate, slippage_bps)
+                edge_interval = edge_interval_for_yes(
+                    float(row.get("model_probability_ci_low") or 0.0),
+                    float(row.get("model_probability_ci_high") or 0.0),
+                    float(executable_price),
+                    fee_rate,
+                    slippage_bps,
+                )
                 row["market_yes_price"] = float(executable_price)
                 row["gross_edge"] = row["model_probability"] - float(executable_price)
                 row["net_edge"] = executable_costs["net_ev"]
+                row.update(edge_interval)
                 row["roi"] = executable_costs["roi"]
                 row["annualized_roi"] = (
                     executable_costs["roi"] * (365.0 / row["days_to_expiry"]) if row["days_to_expiry"] > 0 else 0.0
@@ -908,6 +1036,9 @@ def scan_opportunities(
             "require_realtime_spot": require_realtime_spot,
             "spot_timeout": spot_timeout,
             "min_expiry_minutes": min_expiry_minutes,
+            "model_probability_method": "gbm-closed-form",
+            "mc_diagnostic_paths": simulations,
+            "macro_vol_multipliers": MACRO_VOL_MULTIPLIERS,
         },
         "contexts": {asset: context for asset, context in contexts.items() if context},
         "summary": {
@@ -949,6 +1080,10 @@ def scan_opportunities(
             "macro_active_events": macro.get("active_count"),
             "macro_upcoming_events": macro.get("upcoming_count"),
             "macro_risk_rows": sum(1 for row in opportunities if row.get("macro_risk_level") in {"high", "medium"}),
+            "macro_vol_adjusted": sum(
+                1 for row in opportunities if float_or_none((row.get("vol_components") or {}).get("macro_multiplier")) not in (None, 1.0)
+            ),
+            "uncertain_edges": sum(1 for row in opportunities if row.get("uncertainty_blocks_candidate")),
         },
         "opportunities": top,
     }

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -54,7 +54,13 @@ def _candles_after_observation(
     source = preferred_price_source(conn, asset)
     if not source:
         return []
-    start_key = observed_at.date().isoformat()
+    # Daily OHLC has no intraday ordering. Start from the next UTC day to avoid
+    # counting pre-observation moves from the observation date as future evidence.
+    start_key = datetime.combine(
+        observed_at.date() + timedelta(days=1),
+        time.min,
+        tzinfo=timezone.utc,
+    ).isoformat()
     end_key = f"{end_at.date().isoformat()}T23:59:59+00:00"
     rows = conn.execute(
         """
@@ -386,7 +392,7 @@ def _paper_trade(conn, row: dict[str, Any], now: datetime, default_stake: float)
     candles = _candles_after_observation(conn, str(row["asset"]), observed_at, cutoff)
     hit = _hit_barrier(row, candles)
     result["hit"] = hit
-    result["evidence"] = f"{len(candles)} daily candles checked"
+    result["evidence"] = f"{len(candles)} daily candles checked after observation date"
     if hit:
         payout = stake / price
         pnl = payout - stake
@@ -482,9 +488,10 @@ def _select_paper_rows(
             current_rules_from=current_rules_from,
         )
         market_id = str(row.get("market_id") or "")
-        if market_id and market_id in seen_markets:
+        is_duplicate = bool(market_id and market_id in seen_markets)
+        if is_duplicate:
             reasons.append("duplicate market; newer observation kept")
-        if reasons and (current_only or "duplicate market; newer observation kept" in reasons):
+        if is_duplicate or (reasons and current_only):
             excluded.append(
                 {
                     "observation_id": row.get("id"),
@@ -595,6 +602,8 @@ def _empty_calibration_bucket(name: str) -> dict[str, Any]:
     return {
         "bucket": name,
         "samples": 0,
+        "model_samples": 0,
+        "market_samples": 0,
         "resolved": 0,
         "open": 0,
         "avg_model_probability": 0.0,
@@ -670,18 +679,22 @@ def _attribution_labels(row: dict[str, Any], trade: dict[str, Any], latest: dict
 
 
 def _finalize_calibration_bucket(group: dict[str, Any]) -> dict[str, Any]:
-    samples = int(group["samples"])
+    model_samples = int(group.get("model_samples") or 0)
+    market_samples = int(group.get("market_samples") or 0)
     resolved = int(group["resolved"])
-    group["avg_model_probability"] = group.pop("_model_sum", 0.0) / samples if samples else None
-    group["avg_market_probability"] = group.pop("_market_sum", 0.0) / samples if samples else None
+    group["avg_model_probability"] = group.pop("_model_sum", 0.0) / model_samples if model_samples else None
+    group["avg_market_probability"] = group.pop("_market_sum", 0.0) / market_samples if market_samples else None
     hit_sum = group.pop("_hit_sum", 0.0)
     group["actual_rate"] = hit_sum / resolved if resolved else None
     model_brier_sum = group.pop("_model_brier_sum", 0.0)
     market_brier_sum = group.pop("_market_brier_sum", 0.0)
-    group["model_brier"] = model_brier_sum / resolved if resolved else None
-    group["market_brier"] = market_brier_sum / resolved if resolved else None
-    if group["actual_rate"] is not None:
+    model_brier_count = int(group.pop("_model_brier_count", 0))
+    market_brier_count = int(group.pop("_market_brier_count", 0))
+    group["model_brier"] = model_brier_sum / model_brier_count if model_brier_count else None
+    group["market_brier"] = market_brier_sum / market_brier_count if market_brier_count else None
+    if group["actual_rate"] is not None and group["avg_model_probability"] is not None:
         group["model_error"] = group["avg_model_probability"] - group["actual_rate"]
+    if group["actual_rate"] is not None and group["avg_market_probability"] is not None:
         group["market_error"] = group["avg_market_probability"] - group["actual_rate"]
     return group
 
@@ -700,6 +713,8 @@ def calibration_attribution_report(
     resolved_count = 0
     model_brier_sum = 0.0
     market_brier_sum = 0.0
+    model_brier_count = 0
+    market_brier_count = 0
     edge_sum = 0.0
     edge_count = 0
     for row in rows:
@@ -712,8 +727,12 @@ def calibration_attribution_report(
         bucket_name = _probability_bucket(model_p)
         group = buckets.setdefault(bucket_name, _empty_calibration_bucket(bucket_name))
         group["samples"] += 1
-        group["_model_sum"] = group.get("_model_sum", 0.0) + float(model_p or 0.0)
-        group["_market_sum"] = group.get("_market_sum", 0.0) + float(market_p or 0.0)
+        if model_p is not None:
+            group["model_samples"] += 1
+            group["_model_sum"] = group.get("_model_sum", 0.0) + model_p
+        if market_p is not None:
+            group["market_samples"] += 1
+            group["_market_sum"] = group.get("_market_sum", 0.0) + market_p
         actual: int | None = None
         if trade["status"] == "won":
             actual = 1
@@ -728,11 +747,15 @@ def calibration_attribution_report(
             if model_p is not None:
                 brier = (model_p - actual) ** 2
                 group["_model_brier_sum"] = group.get("_model_brier_sum", 0.0) + brier
+                group["_model_brier_count"] = group.get("_model_brier_count", 0) + 1
                 model_brier_sum += brier
+                model_brier_count += 1
             if market_p is not None:
                 brier = (market_p - actual) ** 2
                 group["_market_brier_sum"] = group.get("_market_brier_sum", 0.0) + brier
+                group["_market_brier_count"] = group.get("_market_brier_count", 0) + 1
                 market_brier_sum += brier
+                market_brier_count += 1
         latest = _latest_market_observation(conn, str(row.get("market_id") or ""))
         labels = _attribution_labels(row, trade, latest)
         for label in labels:
@@ -765,8 +788,8 @@ def calibration_attribution_report(
         {"label": label, "count": count}
         for label, count in sorted(attribution_counts.items(), key=lambda item: (-item[1], item[0]))
     ]
-    model_brier = model_brier_sum / resolved_count if resolved_count else None
-    market_brier = market_brier_sum / resolved_count if resolved_count else None
+    model_brier = model_brier_sum / model_brier_count if model_brier_count else None
+    market_brier = market_brier_sum / market_brier_count if market_brier_count else None
     if model_brier is None or market_brier is None:
         better = "insufficient"
     elif model_brier < market_brier:
