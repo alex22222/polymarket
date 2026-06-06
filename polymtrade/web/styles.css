@@ -771,6 +771,27 @@ canvas {
   padding: 12px;
 }
 
+.position-block {
+  margin-top: 14px;
+}
+
+.compact-head {
+  margin-bottom: 8px;
+}
+
+.compact-head h2 {
+  font-size: 15px;
+}
+
+.compact-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.real-position-row {
+  background: #fffefb;
+}
+
 .paper-row strong {
   align-items: center;
   display: flex;

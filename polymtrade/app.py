@@ -22,6 +22,7 @@ from polymtrade.research.paper import (
     paper_trading_report,
     position_management_report,
 )
+from polymtrade.research.real_position_monitor import evaluate_positions, latest_db_quotes, load_positions
 from polymtrade.reporting.feishu import FeishuConfigError, build_research_report, send_feishu_report
 from polymtrade.storage.db import (
     automation_health,
@@ -286,6 +287,20 @@ class AppHandler(SimpleHTTPRequestHandler):
                         stake=stake,
                         book_timeout=book_timeout,
                         max_book_age_seconds=max_book_age,
+                    )
+                )
+            return
+        if path == "/api/real-positions":
+            timeout = int(query.get("timeout", ["4"])[0])
+            max_fallback_age = float(query.get("max_fallback_age_hours", ["36"])[0])
+            positions = load_positions()
+            with connect(DB_PATH) as conn:
+                assets = {str(position.get("asset") or "").upper() for position in positions if position.get("asset")}
+                self.send_json(
+                    evaluate_positions(
+                        positions,
+                        timeout=timeout,
+                        fallback_quotes=latest_db_quotes(conn, assets, max_age_hours=max_fallback_age),
                     )
                 )
             return

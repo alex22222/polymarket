@@ -60,6 +60,8 @@ const els = {
   positionReview: document.getElementById("positionReview"),
   positionExit: document.getElementById("positionExit"),
   positionPnl: document.getElementById("positionPnl"),
+  realPositionMeta: document.getElementById("realPositionMeta"),
+  realPositionRows: document.getElementById("realPositionRows"),
   positionRows: document.getElementById("positionRows"),
   refreshPositionsBtn: document.getElementById("refreshPositionsBtn"),
   candidateReviewMeta: document.getElementById("candidateReviewMeta"),
@@ -1192,6 +1194,55 @@ function renderPositions(data = {}) {
     .join("");
 }
 
+function realPositionStatus(row) {
+  if (row.status === "spot_unavailable") return `<span class="pill negative-pill">无行情</span>`;
+  if ((row.triggered_rules || []).some((item) => String(item).includes("not_sent_non_realtime"))) return `<span class="pill warning-pill">旧价触发</span>`;
+  if ((row.triggered_rules || []).length) return `<span class="pill negative-pill">已触发</span>`;
+  return `<span class="pill positive-pill">监控中</span>`;
+}
+
+function renderRealPositions(data = {}) {
+  if (!els.realPositionRows) return;
+  const rows = data.positions || [];
+  const generated = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--";
+  const alertCount = (data.alerts || []).length;
+  if (els.realPositionMeta) {
+    els.realPositionMeta.textContent = `生成 ${generated} · 触发 ${alertCount} 条`;
+  }
+  if (!rows.length) {
+    els.realPositionRows.innerHTML = `<div class="coverage-row"><strong>暂无真实持仓配置</strong><span>请检查 data/real_positions.json。</span></div>`;
+    return;
+  }
+  els.realPositionRows.innerHTML = rows
+    .map((row) => {
+      const source = row.spot_source || "--";
+      const fetched = row.spot_fetched_at ? new Date(row.spot_fetched_at).toLocaleString("zh-CN") : "--";
+      const realtime = row.spot_is_realtime ? "实时" : row.spot_source ? "非实时" : "--";
+      const rules = (row.exit_rules || []).map((rule) => `${rule.severity || "review"}: ${rule.message || rule.id}`).join("；");
+      const triggered = (row.triggered_rules || []).length ? `触发 ${row.triggered_rules.join(", ")}` : "未触发";
+      return `
+        <div class="position-row real-position-row">
+          <strong>
+            <span>${realPositionStatus(row)} ${escapeHtml(row.asset)} ${escapeHtml(row.side || "")}</span>
+            <span>${escapeHtml(triggered)}</span>
+          </strong>
+          <span>${escapeHtml(row.question)} ${externalLink(row.portfolio_url, "打开真实持仓")}</span>
+          <div class="position-metrics">
+            <span>份数 <strong>${escapeHtml(row.shares ?? "--")}</strong></span>
+            <span>截图价值 <strong>${money(row.last_screenshot_value)}</strong></span>
+            <span>截图盈亏 <strong>${money(row.last_screenshot_pnl)} / ${percent(row.last_screenshot_pnl_pct)}</strong></span>
+            <span>现货 <strong>${money(row.spot)}</strong></span>
+            <span>目标 <strong>${money(row.barrier)}</strong></span>
+            <span>距离 <strong>${percent(row.distance_to_barrier)}</strong></span>
+          </div>
+          <span>行情 ${escapeHtml(realtime)} · ${escapeHtml(source)} · ${escapeHtml(fetched)}</span>
+          <span>${escapeHtml(rules || "暂无触发规则")}</span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
 function renderCandidateReview(data = {}) {
   const summary = data.summary || {};
   if (els.candidateReviewMeta) els.candidateReviewMeta.textContent = `生成 ${data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--"}`;
@@ -1435,17 +1486,23 @@ async function loadPaperTrading() {
 }
 
 async function loadPositions() {
-  if (!els.positionRows) return;
+  if (!els.positionRows && !els.realPositionRows) return;
   if (els.refreshPositionsBtn) {
     els.refreshPositionsBtn.disabled = true;
     els.refreshPositionsBtn.textContent = "刷新中...";
   }
   if (els.positionMeta) els.positionMeta.textContent = "正在刷新持仓";
   try {
-    const data = await apiJson("/api/position-management?limit=100&stake=100&book_timeout=4&max_book_age_seconds=120");
+    const [realData, data] = await Promise.all([
+      apiJson("/api/real-positions?timeout=4&max_fallback_age_hours=36"),
+      apiJson("/api/position-management?limit=100&stake=100&book_timeout=4&max_book_age_seconds=120"),
+    ]);
+    renderRealPositions(realData);
     renderPositions(data);
     const summary = data.summary || {};
+    const realAlerts = (realData.alerts || []).length;
     els.statusText.textContent = `持仓管理已刷新：开放 ${summary.positions ?? 0} 条，观察退出 ${summary.review ?? 0} 条`;
+    if (realAlerts) els.statusText.textContent += `，真实持仓触发 ${realAlerts} 条`;
   } catch (error) {
     if (els.positionMeta) els.positionMeta.textContent = "刷新失败";
     els.statusText.textContent = `持仓管理刷新失败：${error.message}`;

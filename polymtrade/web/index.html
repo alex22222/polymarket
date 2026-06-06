@@ -283,8 +283,22 @@
           <article><span>应退出</span><strong id="positionExit">--</strong></article>
           <article><span>未实现 PnL</span><strong id="positionPnl">--</strong></article>
         </div>
+        <div class="position-block">
+          <div class="section-head compact-head">
+            <h2>真实持仓监控</h2>
+            <span id="realPositionMeta">等待刷新</span>
+          </div>
+          <div id="realPositionRows" class="position-rows">
+            <div class="coverage-row"><strong>暂无真实持仓监控</strong><span>刷新后显示真实仓位、实时价格和触发规则。</span></div>
+          </div>
+        </div>
+        <div class="position-block">
+          <div class="section-head compact-head">
+            <h2>Paper 持仓观察</h2>
+          </div>
         <div id="positionRows" class="position-rows">
           <div class="coverage-row"><strong>暂无开放持仓</strong><span>当前有效 Paper Trade 出现后，这里会复核退出机会。</span></div>
+        </div>
         </div>
       </section>
 
@@ -421,6 +435,6 @@
 
       <p id="statusText" class="status-line">读取本地数据库</p>
     </main>
-    <script src="/app.js?v=53"></script>
+    <script src="/app.js?v=54"></script>
   </body>
 </html>
