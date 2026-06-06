@@ -1,0 +1,82 @@
+{
+  "positions": [
+    {
+      "id": "eth-no-dip-1500-2026",
+      "asset": "ETH",
+      "question": "Will Ethereum dip to $1,500 by December 31, 2026?",
+      "side": "NO",
+      "direction": "hit_below",
+      "barrier": 1500,
+      "end_date": "2027-01-01T05:00:00Z",
+      "shares": 5.26,
+      "last_screenshot_value": 0.4,
+      "portfolio_url": "https://polym.trade/portfolio?eventId=89502&eventSlug=what-price-will-bitcoin-hit-before-2027&eventSource=polymarket",
+      "exit_rules": [
+        {
+          "id": "eth-no-danger",
+          "severity": "exit",
+          "metric": "spot_lte",
+          "value": 1530,
+          "message": "ETH 已接近 $1,500 触发线，NO 仓位归零风险很高，建议评估平仓。"
+        },
+        {
+          "id": "eth-no-watch",
+          "severity": "review",
+          "metric": "spot_lte",
+          "value": 1560,
+          "message": "ETH 距 $1,500 触发线很近，NO 仓位需要重点盯盘。"
+        }
+      ]
+    },
+    {
+      "id": "btc-yes-reach-75000-june",
+      "asset": "BTC",
+      "question": "Will Bitcoin reach $75,000 in June?",
+      "side": "YES",
+      "direction": "hit_above",
+      "barrier": 75000,
+      "end_date": "2026-07-01T04:00:00Z",
+      "shares": 2.94,
+      "last_screenshot_value": 0.19,
+      "portfolio_url": "https://polym.trade/portfolio?eventId=89502&eventSlug=what-price-will-bitcoin-hit-before-2027&eventSource=polymarket",
+      "exit_rules": [
+        {
+          "id": "btc-75k-take-profit-zone",
+          "severity": "review",
+          "metric": "spot_gte",
+          "value": 72000,
+          "message": "BTC 接近 $75,000 目标，若 YES 价格明显反弹，可考虑锁定部分利润。"
+        },
+        {
+          "id": "btc-75k-time-decay",
+          "severity": "review",
+          "metric": "days_lte_and_spot_lt",
+          "days": 5,
+          "value": 70000,
+          "message": "距离 6 月结束很近且 BTC 仍低于 $70,000，YES 仓位时间衰减风险很高。"
+        }
+      ]
+    },
+    {
+      "id": "btc-yes-dip-55000-2026",
+      "asset": "BTC",
+      "question": "Will Bitcoin dip to $55,000 by December 31, 2026?",
+      "side": "YES",
+      "direction": "hit_below",
+      "barrier": 55000,
+      "end_date": "2027-01-01T05:00:00Z",
+      "shares": 1.22,
+      "last_screenshot_value": 0.99,
+      "portfolio_url": "https://polym.trade/portfolio?eventId=89502&eventSlug=what-price-will-bitcoin-hit-before-2027&eventSource=polymarket",
+      "exit_rules": [
+        {
+          "id": "btc-55k-lock-profit",
+          "severity": "exit",
+          "metric": "spot_lte",
+          "value": 61000,
+          "message": "BTC 已靠近 $55,000 下破路径，YES 仓位大概率接近满值，建议评估锁定利润。"
+        }
+      ]
+    }
+  ]
+}

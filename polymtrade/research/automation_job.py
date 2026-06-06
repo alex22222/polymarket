@@ -11,6 +11,7 @@ from polymtrade.data.polymarket_api import (
     search_gamma_barrier_markets,
     search_polymtrade_barrier_markets,
 )
+from polymtrade.research.real_position_monitor import evaluate_positions, latest_db_quotes, load_positions, send_alerts
 from polymtrade.research.scanner import scan_opportunities
 from polymtrade.storage.db import (
     candle_summary,
@@ -47,6 +48,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-book-age-seconds", type=int, default=120)
     parser.add_argument("--max-spread", type=float, default=0.04)
     parser.add_argument("--min-expiry-minutes", type=int, default=30)
+    parser.add_argument("--skip-real-positions", action="store_true")
+    parser.add_argument("--real-position-config", default="data/real_positions.json")
+    parser.add_argument("--real-position-cooldown-hours", type=float, default=12.0)
+    parser.add_argument("--real-position-max-fallback-age-hours", type=float, default=36.0)
     return parser.parse_args()
 
 
@@ -125,6 +130,28 @@ def run_scanner(db_path: str, args: argparse.Namespace) -> dict:
         "observation_run_id": observation_run_id,
         "observation_summary": observation_summary,
     }
+
+
+def monitor_real_positions(db_path: str, args: argparse.Namespace) -> dict:
+    positions = load_positions(args.real_position_config)
+    with connect(db_path) as conn:
+        assets = {str(position.get("asset") or "").upper() for position in positions if position.get("asset")}
+        report = evaluate_positions(
+            positions,
+            timeout=args.book_timeout,
+            fallback_quotes=latest_db_quotes(conn, assets, max_age_hours=args.real_position_max_fallback_age_hours),
+        )
+        if report.get("alerts"):
+            try:
+                report["notification"] = send_alerts(
+                    conn,
+                    report["alerts"],
+                    cooldown_hours=args.real_position_cooldown_hours,
+                )
+            except Exception as exc:  # noqa: BLE001 - monitor should not break data automation
+                report["notification"] = {"ok": False, "error": str(exc)}
+                insert_log(conn, "ERROR", "real_positions", f"Real position alert failed: {exc}", json.dumps(report, ensure_ascii=False))
+    return report
 
 
 _NETWORK_UNAVAILABLE_PATTERNS = (
@@ -254,6 +281,7 @@ def main() -> int:
         "prices": None,
         "markets": None,
         "scanner": None,
+        "real_positions": None,
     }
     try:
         if not args.skip_prices:
@@ -262,6 +290,8 @@ def main() -> int:
             result["markets"] = refresh_markets(args.db)
         if not args.skip_scanner:
             result["scanner"] = run_scanner(args.db, args)
+        if not args.skip_real_positions:
+            result["real_positions"] = monitor_real_positions(args.db, args)
         with connect(args.db) as conn:
             log_id = insert_log(conn, "INFO", "automation", "Automated data refresh completed", json.dumps(result, ensure_ascii=False))
             insert_automation_source_health(conn, log_id, source_health_rows(result))
