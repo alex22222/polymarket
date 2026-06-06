@@ -75,10 +75,13 @@ rsync -az --delete --progress $DRY_RUN \
   --exclude ".git/" \
   --exclude ".venv/" \
   --exclude "__pycache__/" \
+  --exclude "backups/" \
   --exclude "*.pyc" \
   --exclude ".DS_Store" \
   --exclude ".env" \
   --exclude "polymtrade.sqlite" \
+  --exclude "*.sqlite" \
+  --exclude "*.sqlite3" \
   --exclude "*.sqlite-wal" \
   --exclude "*.sqlite-shm" \
   --exclude "automation.log" \
