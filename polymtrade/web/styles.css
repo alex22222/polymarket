@@ -198,10 +198,12 @@ h2 {
 .validation-nav-section,
 .observation-section,
 .quality-section,
+.strategy-section,
 .macro-section,
 .calibration-section,
 .paper-section,
 .position-section,
+.real-position-section,
 .candidate-review-section,
 .price-panel,
 .coverage-panel {
@@ -248,10 +250,12 @@ h2 {
 .validation-nav-section,
 .observation-section,
 .quality-section,
+.strategy-section,
 .macro-section,
 .calibration-section,
 .paper-section,
 .position-section,
+.real-position-section,
 .candidate-review-section,
 .price-panel,
 .coverage-panel {
@@ -300,6 +304,27 @@ canvas {
   display: block;
   margin-top: 5px;
   font-size: 14px;
+}
+
+.strategy-stack-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.overview-macro-panel .section-head {
+  align-items: flex-start;
+}
+
+.overview-macro-panel .compact-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.overview-macro-panel .quality-summary article {
+  min-height: 66px;
+  padding: 10px;
+}
+
+.overview-macro-panel .quality-summary strong {
+  font-size: 18px;
 }
 
 .table-section {
@@ -366,6 +391,7 @@ canvas {
 .macro-section,
 .calibration-section,
 .position-section,
+.real-position-section,
 .candidate-review-section {
   margin-top: 16px;
 }

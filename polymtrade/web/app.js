@@ -1,6 +1,7 @@
 const els = {
   topScanBtn: document.getElementById("topScanBtn"),
   refreshBtn: document.getElementById("refreshBtn"),
+  metricsPanel: document.getElementById("metricsPanel"),
   statusText: document.getElementById("statusText"),
   versionBadge: document.getElementById("versionBadge"),
   priceChart: document.getElementById("priceChart"),
@@ -377,6 +378,9 @@ function setActiveView(view) {
     if (section.dataset.validationPanel) return;
     section.classList.toggle("hidden", section.dataset.view !== activeView);
   });
+  if (els.metricsPanel) {
+    els.metricsPanel.classList.toggle("hidden", activeView === "overview" || activeView === "system");
+  }
   renderValidationPanel();
   window.location.hash = activeView === "validation" ? `validation:${activeValidationPanel}` : activeView;
   if (activeView === "overview") {
