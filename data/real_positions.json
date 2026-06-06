@@ -1,4 +1,6 @@
 {
+  "wallet": "0x4fbCC39221AF92397C82b9CCbF88FD0a9695A244",
+  "size_threshold": 0.01,
   "positions": [
     {
       "id": "eth-no-dip-1500-2026",

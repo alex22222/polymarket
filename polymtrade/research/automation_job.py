@@ -11,7 +11,7 @@ from polymtrade.data.polymarket_api import (
     search_gamma_barrier_markets,
     search_polymtrade_barrier_markets,
 )
-from polymtrade.research.real_position_monitor import evaluate_positions, latest_db_quotes, load_positions, send_alerts
+from polymtrade.research.real_position_monitor import evaluate_positions, latest_db_quotes, load_monitor_positions, send_alerts
 from polymtrade.research.scanner import scan_opportunities
 from polymtrade.storage.db import (
     candle_summary,
@@ -133,7 +133,7 @@ def run_scanner(db_path: str, args: argparse.Namespace) -> dict:
 
 
 def monitor_real_positions(db_path: str, args: argparse.Namespace) -> dict:
-    positions = load_positions(args.real_position_config)
+    positions, position_meta = load_monitor_positions(args.real_position_config, timeout=args.book_timeout)
     with connect(db_path) as conn:
         assets = {str(position.get("asset") or "").upper() for position in positions if position.get("asset")}
         report = evaluate_positions(
@@ -141,6 +141,7 @@ def monitor_real_positions(db_path: str, args: argparse.Namespace) -> dict:
             timeout=args.book_timeout,
             fallback_quotes=latest_db_quotes(conn, assets, max_age_hours=args.real_position_max_fallback_age_hours),
         )
+        report["position_source"] = position_meta
         if report.get("alerts"):
             try:
                 report["notification"] = send_alerts(

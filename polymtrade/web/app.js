@@ -118,7 +118,12 @@ function percent(value) {
 
 function money(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+  const amount = Number(value);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: Math.abs(amount) < 10 ? 2 : 0,
+  }).format(amount);
 }
 
 function compactMoney(value) {
@@ -1211,11 +1216,17 @@ function renderRealPositions(data = {}) {
   const rows = data.positions || [];
   const generated = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--";
   const alertCount = (data.alerts || []).length;
+  const positionSource = data.position_source || {};
+  const wallet = positionSource.wallet ? `${String(positionSource.wallet).slice(0, 6)}...${String(positionSource.wallet).slice(-4)}` : "--";
+  const sourceLabel = positionSource.mode === "wallet_api"
+    ? `钱包 API · ${escapeHtml(wallet)} · ${escapeHtml(positionSource.source || "source unavailable")}`
+    : "手工配置";
   if (els.realPositionMeta) {
-    els.realPositionMeta.textContent = `生成 ${generated} · 触发 ${alertCount} 条`;
+    els.realPositionMeta.textContent = `生成 ${generated} · ${sourceLabel} · 触发 ${alertCount} 条`;
   }
   if (!rows.length) {
-    els.realPositionRows.innerHTML = `<div class="coverage-row"><strong>暂无真实持仓配置</strong><span>请检查 data/real_positions.json。</span></div>`;
+    const errors = (positionSource.errors || []).join("；");
+    els.realPositionRows.innerHTML = `<div class="coverage-row"><strong>暂无真实持仓</strong><span>${escapeHtml(errors || "未从钱包 API 获取到持仓。")}</span></div>`;
     return;
   }
   els.realPositionRows.innerHTML = rows
@@ -1234,13 +1245,16 @@ function renderRealPositions(data = {}) {
           <span>${escapeHtml(row.question)} ${externalLink(row.portfolio_url, "打开真实持仓")}</span>
           <div class="position-metrics">
             <span>份数 <strong>${escapeHtml(row.shares ?? "--")}</strong></span>
-            <span>截图价值 <strong>${money(row.last_screenshot_value)}</strong></span>
-            <span>截图盈亏 <strong>${money(row.last_screenshot_pnl)} / ${percent(row.last_screenshot_pnl_pct)}</strong></span>
+            <span>成本 <strong>${money(row.initial_value)}</strong></span>
+            <span>当前价值 <strong>${money(row.current_value)}</strong></span>
+            <span>PnL <strong>${money(row.cash_pnl)} / ${percent(row.percent_pnl)}</strong></span>
+            <span>均价 <strong>${percent(row.avg_price)}</strong></span>
+            <span>当前合约价 <strong>${percent(row.current_price)}</strong></span>
             <span>现货 <strong>${money(row.spot)}</strong></span>
             <span>目标 <strong>${money(row.barrier)}</strong></span>
             <span>距离 <strong>${percent(row.distance_to_barrier)}</strong></span>
           </div>
-          <span>行情 ${escapeHtml(realtime)} · ${escapeHtml(source)} · ${escapeHtml(fetched)}</span>
+          <span>持仓源 ${escapeHtml(row.position_source || "--")} · 行情 ${escapeHtml(realtime)} · ${escapeHtml(source)} · ${escapeHtml(fetched)}</span>
           <span>${escapeHtml(rules || "暂无触发规则")}</span>
         </div>
       `;
