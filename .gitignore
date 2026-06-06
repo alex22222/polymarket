@@ -35,6 +35,8 @@ env/
 
 # SQLite databases (generated at runtime)
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.sqlite3
 *.db
 .deploy_version.json

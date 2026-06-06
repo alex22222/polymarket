@@ -79,6 +79,8 @@ rsync -az --delete --progress $DRY_RUN \
   --exclude ".DS_Store" \
   --exclude ".env" \
   --exclude "polymtrade.sqlite" \
+  --exclude "*.sqlite-wal" \
+  --exclude "*.sqlite-shm" \
   --exclude "automation.log" \
   --exclude "server.log" \
   --exclude "monitor.log" \
