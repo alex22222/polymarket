@@ -10,6 +10,8 @@
       "end_date": "2027-01-01T05:00:00Z",
       "shares": 5.26,
       "last_screenshot_value": 0.4,
+      "last_screenshot_pnl": -0.6,
+      "last_screenshot_pnl_pct": -0.60,
       "portfolio_url": "https://polym.trade/portfolio?eventId=89502&eventSlug=what-price-will-bitcoin-hit-before-2027&eventSource=polymarket",
       "exit_rules": [
         {
@@ -38,6 +40,8 @@
       "end_date": "2026-07-01T04:00:00Z",
       "shares": 2.94,
       "last_screenshot_value": 0.19,
+      "last_screenshot_pnl": -0.81,
+      "last_screenshot_pnl_pct": -0.809,
       "portfolio_url": "https://polym.trade/portfolio?eventId=89502&eventSlug=what-price-will-bitcoin-hit-before-2027&eventSource=polymarket",
       "exit_rules": [
         {
@@ -67,6 +71,8 @@
       "end_date": "2027-01-01T05:00:00Z",
       "shares": 1.22,
       "last_screenshot_value": 0.99,
+      "last_screenshot_pnl": -0.01,
+      "last_screenshot_pnl_pct": -0.006,
       "portfolio_url": "https://polym.trade/portfolio?eventId=89502&eventSlug=what-price-will-bitcoin-hit-before-2027&eventSource=polymarket",
       "exit_rules": [
         {

@@ -33,6 +33,11 @@ def _fmt_percent(value: Any) -> str:
     return "--" if numeric is None else f"{numeric * 100:.1f}%"
 
 
+def _fmt_datetime(value: Any) -> str:
+    parsed = _parse_datetime(value)
+    return "--" if not parsed else parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
 def load_positions(path: str | Path = DEFAULT_CONFIG) -> list[dict[str, Any]]:
     config_path = Path(path)
     if not config_path.exists():
@@ -105,6 +110,7 @@ def latest_db_quotes(conn, assets: set[str], max_age_hours: float = 36.0) -> dic
                 "price": float(row["close"]),
                 "source": f"{row['source']}:daily-close",
                 "fetched_at": row["ts"],
+                "is_realtime": False,
             }
     return quotes
 
@@ -124,7 +130,7 @@ def evaluate_positions(
     for asset in sorted({str(position.get("asset") or "").upper() for position in positions if position.get("asset")}):
         quote, source_errors = fetch_best_spot(asset, timeout=timeout)
         if quote:
-            quotes[asset] = {"price": quote.price, "source": quote.source, "fetched_at": quote.fetched_at}
+            quotes[asset] = {"price": quote.price, "source": quote.source, "fetched_at": quote.fetched_at, "is_realtime": True}
         elif asset in fallback_quotes:
             quotes[asset] = fallback_quotes[asset]
             errors.extend(f"{asset} realtime unavailable; using {fallback_quotes[asset].get('source')}" for _ in [0])
@@ -145,6 +151,8 @@ def evaluate_positions(
             "status": "evaluated",
             "spot": spot,
             "spot_source": quote["source"],
+            "spot_fetched_at": quote.get("fetched_at"),
+            "spot_is_realtime": bool(quote.get("is_realtime")),
             "distance_to_barrier": distance,
             "triggered_rules": [],
         }
@@ -152,6 +160,9 @@ def evaluate_positions(
             if not isinstance(rule, dict):
                 continue
             if _rule_triggered(rule, position, spot, now):
+                if not quote.get("is_realtime"):
+                    row["triggered_rules"].append(f"{rule.get('id')}:not_sent_non_realtime")
+                    continue
                 alert = {
                     "alert_id": f"{position.get('id')}::{rule.get('id')}",
                     "position_id": position.get("id"),
@@ -162,10 +173,15 @@ def evaluate_positions(
                     "shares": position.get("shares"),
                     "spot": spot,
                     "spot_source": quote["source"],
+                    "spot_fetched_at": quote.get("fetched_at"),
+                    "spot_is_realtime": bool(quote.get("is_realtime")),
                     "distance_to_barrier": distance,
                     "severity": rule.get("severity") or "review",
                     "message": rule.get("message") or "真实持仓触发复核条件",
                     "portfolio_url": position.get("portfolio_url"),
+                    "last_screenshot_value": position.get("last_screenshot_value"),
+                    "last_screenshot_pnl": position.get("last_screenshot_pnl"),
+                    "last_screenshot_pnl_pct": position.get("last_screenshot_pnl_pct"),
                 }
                 row["triggered_rules"].append(rule.get("id"))
                 alerts.append(alert)
@@ -193,7 +209,9 @@ def build_alert_text(alerts: list[dict[str, Any]]) -> str:
                 f"{index}. {alert.get('asset')} {alert.get('side')} · {alert.get('severity')}",
                 str(alert.get("question") or ""),
                 f"现货 {_fmt_money(alert.get('spot'))} · 目标 {_fmt_money(alert.get('barrier'))} · 距触发 {_fmt_percent(distance)}",
-                f"份数 {alert.get('shares') or '--'} · {alert.get('message')}",
+                f"行情源 {alert.get('spot_source') or '--'} · 更新时间 {_fmt_datetime(alert.get('spot_fetched_at'))}",
+                f"持仓 {alert.get('shares') or '--'} 份 · 截图价值 {_fmt_money(alert.get('last_screenshot_value'))} · 截图盈亏 {_fmt_money(alert.get('last_screenshot_pnl'))} ({_fmt_percent(alert.get('last_screenshot_pnl_pct'))})",
+                str(alert.get("message") or ""),
             ]
         )
         if alert.get("portfolio_url"):
