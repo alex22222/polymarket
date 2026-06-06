@@ -360,6 +360,7 @@
             <span>对角线以上代表模型概率更高</span>
           </div>
           <canvas id="edgeChart" width="1100" height="360"></canvas>
+          <div id="edgeOutliers" class="edge-outliers"></div>
         </div>
         <div class="table-wrap">
           <table class="scanner-table">
@@ -370,7 +371,7 @@
                 <th class="sortable" data-sort="review_status">复核</th>
                 <th class="sortable" data-sort="asset">资产</th>
                 <th class="sortable" data-sort="question">市场</th>
-                <th class="sortable" data-sort="direction">方向</th>
+                <th class="sortable" data-sort="direction">买入建议</th>
                 <th class="sortable" data-sort="spot">现价</th>
                 <th class="sortable" data-sort="barrier">目标</th>
                 <th class="sortable" data-sort="days_to_expiry">到期</th>
@@ -419,6 +420,6 @@
 
       <p id="statusText" class="status-line">读取本地数据库</p>
     </main>
-    <script src="/app.js?v=48"></script>
+    <script src="/app.js?v=50"></script>
   </body>
 </html>

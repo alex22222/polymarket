@@ -5,6 +5,7 @@ const els = {
   versionBadge: document.getElementById("versionBadge"),
   priceChart: document.getElementById("priceChart"),
   edgeChart: document.getElementById("edgeChart"),
+  edgeOutliers: document.getElementById("edgeOutliers"),
   fetchPricesBtn: document.getElementById("fetchPricesBtn"),
   fetchMarketsBtn: document.getElementById("fetchMarketsBtn"),
   sendReportBtn: document.getElementById("sendReportBtn"),
@@ -102,6 +103,8 @@ const els = {
 let selectedAsset = "BTC";
 let lastPrices = [];
 let lastScanner = null;
+let edgeChartPoints = [];
+let edgeChartHoverId = null;
 let scannerSort = { field: null, dir: "asc" };
 let activeView = "overview";
 let activeValidationPanel = "positions";
@@ -123,6 +126,35 @@ function compactMoney(value) {
   if (Math.abs(amount) >= 1_000_000) return `$${(amount / 1_000_000).toFixed(1)}M`;
   if (Math.abs(amount) >= 1_000) return `$${(amount / 1_000).toFixed(1)}K`;
   return money(amount);
+}
+
+function edgeDislocation(row) {
+  const model = Number(row.model_probability);
+  const market = Number(row.market_yes_price);
+  if (!Number.isFinite(model) || !Number.isFinite(market)) return 0;
+  return Math.abs(model - market);
+}
+
+function shortQuestion(text, max = 72) {
+  const value = String(text || "");
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function roundedRect(ctx, x, y, width, height, radius) {
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(x, y, width, height, radius);
+    return;
+  }
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
 }
 
 async function apiJson(url, options) {
@@ -191,6 +223,17 @@ function tierCell(row) {
     blocked: "negative-pill",
   }[tier] || "neutral-pill";
   return `<span class="pill ${cls}">${escapeHtml(label)}</span><small>${escapeHtml(row.opportunity_tier_reason || "")}</small>`;
+}
+
+function tradeDirectionCell(row) {
+  const label = row.direction_label || (row.direction === "hit_below" ? "下破" : "上破");
+  const recommendation = row.trade_recommendation || `买 YES ${label}`;
+  const cls = row.action === "candidate" ? "positive-pill" : row.opportunity_tier === "near" ? "warning-pill" : "neutral-pill";
+  const relation = row.direction === "hit_below"
+    ? `YES = ${money(row.spot)} 跌到/跌破 ${money(row.barrier)}`
+    : `YES = ${money(row.spot)} 涨到/涨破 ${money(row.barrier)}`;
+  const noMeaning = row.direction === "hit_below" ? "NO = 不下破" : "NO = 不上破";
+  return `<span class="pill ${cls}">${escapeHtml(recommendation)}</span><small>${escapeHtml(relation)}</small><small>${escapeHtml(noMeaning)}</small>`;
 }
 
 function reviewCell(row) {
@@ -441,6 +484,7 @@ function drawPriceChart(candles) {
 
 function drawEdgeChart(rows) {
   const canvas = els.edgeChart;
+  edgeChartPoints = [];
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   canvas.width = Math.max(600, Math.floor(rect.width * dpr));
@@ -487,9 +531,14 @@ function drawEdgeChart(rows) {
     ctx.fillText("暂无 scanner 点位", pad, height / 2);
   }
 
+  const outliers = [...validRows].sort((a, b) => edgeDislocation(b) - edgeDislocation(a)).slice(0, 5);
+  const outlierIds = new Map(outliers.map((row, index) => [String(row.market_id || row.question), index + 1]));
+
   validRows.forEach((row) => {
     const x = xFor(Number(row.market_yes_price));
     const y = yFor(Number(row.model_probability));
+    const pointId = String(row.market_id || row.question);
+    const outlierRank = outlierIds.get(pointId);
     const radius = row.action === "candidate" ? 6 : row.action === "verify" ? 5 : 4;
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
@@ -497,7 +546,48 @@ function drawEdgeChart(rows) {
     ctx.globalAlpha = row.action === "avoid" ? 0.35 : 0.82;
     ctx.fill();
     ctx.globalAlpha = 1;
+    if (outlierRank) {
+      ctx.fillStyle = "#17201c";
+      ctx.font = "bold 11px system-ui";
+      ctx.fillText(String(outlierRank), x + radius + 3, y - radius - 2);
+    }
+    edgeChartPoints.push({ x, y, radius: Math.max(radius + 6, 12), row, outlierRank });
   });
+
+  const hovered = edgeChartHoverId
+    ? edgeChartPoints.find((point) => String(point.row.market_id || point.row.question) === edgeChartHoverId)
+    : null;
+  if (hovered) {
+    const row = hovered.row;
+    ctx.beginPath();
+    ctx.arc(hovered.x, hovered.y, hovered.radius - 2, 0, Math.PI * 2);
+    ctx.strokeStyle = "#17201c";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    const detail = [
+      `${row.trade_recommendation || (row.direction === "hit_below" ? "买 YES 下破" : "买 YES 上破")} · ${row.asset}`,
+      `市场 ${percent(row.market_yes_price)} / 模型 ${percent(row.model_probability)} / 差异 ${signedPercentText(row.model_probability - row.market_yes_price)}`,
+      shortQuestion(row.question, 54),
+    ];
+    const boxWidth = Math.min(430, width - pad * 2);
+    const boxHeight = 74;
+    const boxX = Math.min(width - pad - boxWidth, Math.max(pad, hovered.x + 14));
+    const boxY = Math.min(height - pad - boxHeight, Math.max(pad, hovered.y - boxHeight - 14));
+    ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+    ctx.strokeStyle = "#d6dfda";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    roundedRect(ctx, boxX, boxY, boxWidth, boxHeight, 8);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#17201c";
+    ctx.font = "bold 12px system-ui";
+    ctx.fillText(detail[0], boxX + 10, boxY + 20);
+    ctx.font = "12px system-ui";
+    ctx.fillText(detail[1], boxX + 10, boxY + 42);
+    ctx.fillStyle = "#65736d";
+    ctx.fillText(detail[2], boxX + 10, boxY + 62);
+  }
 
   ctx.fillStyle = "#17201c";
   ctx.font = "12px system-ui";
@@ -511,6 +601,37 @@ function drawEdgeChart(rows) {
   ctx.fillText("0%", pad - 8, height - pad + 18);
   ctx.fillText("100%", width - pad - 24, height - pad + 18);
   ctx.fillText("100%", pad - 36, pad + 4);
+  renderEdgeOutliers(outliers);
+}
+
+function renderEdgeOutliers(rows) {
+  if (!els.edgeOutliers) return;
+  if (!rows.length) {
+    els.edgeOutliers.innerHTML = `<div class="edge-outlier-empty">暂无模型与市场分歧点</div>`;
+    return;
+  }
+  els.edgeOutliers.innerHTML = rows
+    .map((row, index) => {
+      const id = escapeHtml(String(row.market_id || row.question));
+      const gap = Number(row.model_probability) - Number(row.market_yes_price);
+      const active = edgeChartHoverId === String(row.market_id || row.question) ? " active" : "";
+      return `
+        <button class="edge-outlier${active}" data-edge-id="${id}">
+          <span class="edge-rank">${index + 1}</span>
+          <strong>${escapeHtml(row.trade_recommendation || (row.direction === "hit_below" ? "买 YES 下破" : "买 YES 上破"))}</strong>
+          <span>${escapeHtml(row.asset)} · 市场 ${percent(row.market_yes_price)} · 模型 ${percent(row.model_probability)} · 差异 ${signedPercentText(gap)}</span>
+          <small>${escapeHtml(shortQuestion(row.question, 92))}</small>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function edgePointAtEvent(event) {
+  const rect = els.edgeChart.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  return edgeChartPoints.find((point) => Math.hypot(point.x - x, point.y - y) <= point.radius);
 }
 
 function renderCoverage(candleRows, marketRows = [], priceHistoryRows = []) {
@@ -1180,7 +1301,7 @@ function renderScanner(data) {
           <td class="review-cell">${reviewCell(row)}</td>
           <td>${escapeHtml(row.asset)}</td>
           <td class="question">${questionCell(row)}</td>
-          <td>${row.direction === "hit_below" ? "下破" : "上破"}</td>
+          <td class="trade-cell">${tradeDirectionCell(row)}</td>
           <td>${money(row.spot)}</td>
           <td>${money(row.barrier)}</td>
           <td>${expiryCell(row)}</td>
@@ -1557,6 +1678,36 @@ if (els.refreshLogsBtn) els.refreshLogsBtn.addEventListener("click", loadLogs);
 if (els.clearLogsBtn) els.clearLogsBtn.addEventListener("click", clearLogs);
 if (els.logLevelFilter) els.logLevelFilter.addEventListener("change", loadLogs);
 if (els.logModuleFilter) els.logModuleFilter.addEventListener("change", loadLogs);
+if (els.edgeChart) {
+  els.edgeChart.addEventListener("mousemove", (event) => {
+    const point = edgePointAtEvent(event);
+    const nextId = point ? String(point.row.market_id || point.row.question) : null;
+    els.edgeChart.style.cursor = point ? "pointer" : "default";
+    if (nextId !== edgeChartHoverId) {
+      edgeChartHoverId = nextId;
+      drawEdgeChart(lastScanner?.opportunities || []);
+    }
+  });
+  els.edgeChart.addEventListener("mouseleave", () => {
+    if (!edgeChartHoverId) return;
+    edgeChartHoverId = null;
+    els.edgeChart.style.cursor = "default";
+    drawEdgeChart(lastScanner?.opportunities || []);
+  });
+}
+if (els.edgeOutliers) {
+  els.edgeOutliers.addEventListener("mouseover", (event) => {
+    const item = event.target.closest("[data-edge-id]");
+    if (!item || item.dataset.edgeId === edgeChartHoverId) return;
+    edgeChartHoverId = item.dataset.edgeId;
+    drawEdgeChart(lastScanner?.opportunities || []);
+  });
+  els.edgeOutliers.addEventListener("mouseleave", () => {
+    if (!edgeChartHoverId) return;
+    edgeChartHoverId = null;
+    drawEdgeChart(lastScanner?.opportunities || []);
+  });
+}
 document.querySelectorAll(".scanner-table th.sortable").forEach((th) => {
   th.addEventListener("click", () => {
     const field = th.dataset.sort;

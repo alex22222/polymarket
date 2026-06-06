@@ -847,6 +847,7 @@ def scan_opportunities(
             if direction == "hit_above"
             else spot <= barrier
         )
+        direction_label = "下破" if direction == "hit_below" else "上破"
         iv_quote = None
         if vol_model == "factor":
             iv_quote = select_atm_iv(
@@ -890,6 +891,9 @@ def scan_opportunities(
                 "asset": market["asset"],
                 "question": market["question"],
                 "direction": direction,
+                "direction_label": direction_label,
+                "trade_side": "YES",
+                "trade_recommendation": f"买 YES {direction_label}",
                 "spot": spot,
                 "barrier": barrier,
                 "days_to_expiry": days_to_expiry,

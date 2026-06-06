@@ -912,6 +912,65 @@ canvas {
   height: 300px;
 }
 
+.edge-outliers {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin-top: 10px;
+}
+
+.edge-outlier {
+  align-items: flex-start;
+  background: #fbfcfa;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  grid-template-columns: 28px 1fr;
+  min-height: 78px;
+  padding: 9px;
+  text-align: left;
+}
+
+.edge-outlier:hover,
+.edge-outlier.active {
+  border-color: #8eb8a8;
+  box-shadow: inset 0 0 0 1px #8eb8a8;
+}
+
+.edge-rank {
+  align-items: center;
+  background: #e8f5ef;
+  border-radius: 999px;
+  color: var(--green);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+.edge-outlier strong,
+.edge-outlier span,
+.edge-outlier small {
+  grid-column: 2;
+}
+
+.edge-outlier span,
+.edge-outlier small,
+.edge-outlier-empty {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.edge-outlier-empty {
+  padding: 8px 0;
+}
+
 .scanner-summary article {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1039,6 +1098,10 @@ td.question {
 
 td.review-cell {
   min-width: 180px;
+}
+
+td.trade-cell {
+  min-width: 190px;
 }
 
 td small {
