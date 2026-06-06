@@ -313,6 +313,8 @@ def upsert_candles(conn: sqlite3.Connection, candles: list[Any]) -> int:
 
 
 def candle_summary(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    recommendations = data_quality_report(conn).get("recommendations") or {}
     rows = conn.execute(
         """
         select
@@ -335,7 +337,16 @@ def candle_summary(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         order by asset, source, interval
         """
     ).fetchall()
-    return [dict(row) for row in rows]
+    summary: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        last_date = _date_from_ts(item["last_ts"]).date() if item.get("last_ts") else None
+        item["stale_days"] = (now.date() - last_date).days if last_date else None
+        recommended = recommendations.get(item["asset"]) or {}
+        item["selected"] = recommended.get("source") == item["source"] and item["interval"] == "1d"
+        item["status"] = "stale" if item["stale_days"] is not None and item["stale_days"] > 3 else "healthy"
+        summary.append(item)
+    return summary
 
 
 def candles_for_asset(

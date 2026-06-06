@@ -28,7 +28,7 @@ from polymtrade.storage.db import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Refresh Polymtrade research data and optionally save scanner observations")
     parser.add_argument("--db", default="polymtrade.sqlite")
-    parser.add_argument("--days", type=int, default=10)
+    parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--skip-prices", action="store_true")
     parser.add_argument("--skip-markets", action="store_true")
     parser.add_argument("--skip-scanner", action="store_true")

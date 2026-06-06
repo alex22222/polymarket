@@ -659,13 +659,18 @@ function renderCoverage(candleRows, marketRows = [], priceHistoryRows = []) {
   }
   const candles = candleRows
     .map(
-      (row) => `
+      (row) => {
+        const status = row.selected ? "推荐源" : row.status === "stale" ? "过期源" : "备用源";
+        const statusClass = row.selected ? "source-ok" : row.status === "stale" ? "source-warn" : "source-muted";
+        const stale = row.stale_days === null || row.stale_days === undefined ? "--" : `${row.stale_days}d`;
+        return `
         <div class="coverage-row">
-          <strong><span>${escapeHtml(row.asset)} / ${escapeHtml(row.source)}</span><span>${row.candles} 根</span></strong>
+          <strong><span>${escapeHtml(row.asset)} / ${escapeHtml(row.source)}</span><span class="source-status ${statusClass}">${status}</span></strong>
           <span>${new Date(row.first_ts).toLocaleDateString()} 至 ${new Date(row.last_ts).toLocaleDateString()}</span>
-          <span>latest close ${money(row.latest_close)} · ${row.interval}</span>
+          <span>${row.candles} 根 · latest ${money(row.latest_close)} · stale ${stale} · ${row.interval}</span>
         </div>
-      `,
+      `;
+      },
     )
     .join("");
   const markets = marketRows
