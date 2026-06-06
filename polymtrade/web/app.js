@@ -140,6 +140,10 @@ function shortQuestion(text, max = 72) {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
+function edgeRowId(row) {
+  return String(row?.market_id || row?.question || "");
+}
+
 function roundedRect(ctx, x, y, width, height, radius) {
   if (typeof ctx.roundRect === "function") {
     ctx.roundRect(x, y, width, height, radius);
@@ -532,12 +536,12 @@ function drawEdgeChart(rows) {
   }
 
   const outliers = [...validRows].sort((a, b) => edgeDislocation(b) - edgeDislocation(a)).slice(0, 5);
-  const outlierIds = new Map(outliers.map((row, index) => [String(row.market_id || row.question), index + 1]));
+  const outlierIds = new Map(outliers.map((row, index) => [edgeRowId(row), index + 1]));
 
   validRows.forEach((row) => {
     const x = xFor(Number(row.market_yes_price));
     const y = yFor(Number(row.model_probability));
-    const pointId = String(row.market_id || row.question);
+    const pointId = edgeRowId(row);
     const outlierRank = outlierIds.get(pointId);
     const radius = row.action === "candidate" ? 6 : row.action === "verify" ? 5 : 4;
     ctx.beginPath();
@@ -555,7 +559,7 @@ function drawEdgeChart(rows) {
   });
 
   const hovered = edgeChartHoverId
-    ? edgeChartPoints.find((point) => String(point.row.market_id || point.row.question) === edgeChartHoverId)
+    ? edgeChartPoints.find((point) => edgeRowId(point.row) === edgeChartHoverId)
     : null;
   if (hovered) {
     const row = hovered.row;
@@ -612,12 +616,12 @@ function renderEdgeOutliers(rows) {
   }
   els.edgeOutliers.innerHTML = rows
     .map((row, index) => {
-      const id = escapeHtml(String(row.market_id || row.question));
+      const id = escapeHtml(edgeRowId(row));
       const gap = Number(row.model_probability) - Number(row.market_yes_price);
-      const active = edgeChartHoverId === String(row.market_id || row.question) ? " active" : "";
+      const active = edgeChartHoverId === edgeRowId(row) ? " active" : "";
       return `
         <button class="edge-outlier${active}" data-edge-id="${id}">
-          <span class="edge-rank">${index + 1}</span>
+          <span class="edge-rank">图 ${index + 1}</span>
           <strong>${escapeHtml(row.trade_recommendation || (row.direction === "hit_below" ? "买 YES 下破" : "买 YES 上破"))}</strong>
           <span>${escapeHtml(row.asset)} · 市场 ${percent(row.market_yes_price)} · 模型 ${percent(row.model_probability)} · 差异 ${signedPercentText(gap)}</span>
           <small>${escapeHtml(shortQuestion(row.question, 92))}</small>
@@ -632,6 +636,18 @@ function edgePointAtEvent(event) {
   const x = event.clientX - rect.left;
   const y = event.clientY - rect.top;
   return edgeChartPoints.find((point) => Math.hypot(point.x - x, point.y - y) <= point.radius);
+}
+
+function scrollToScannerRow(edgeId) {
+  if (!edgeId || !els.scannerRows) return;
+  const row = [...els.scannerRows.querySelectorAll("[data-edge-id]")].find((item) => item.dataset.edgeId === edgeId);
+  if (!row) return;
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.remove("scanner-row-highlight");
+  window.requestAnimationFrame(() => {
+    row.classList.add("scanner-row-highlight");
+    window.setTimeout(() => row.classList.remove("scanner-row-highlight"), 1800);
+  });
 }
 
 function renderCoverage(candleRows, marketRows = [], priceHistoryRows = []) {
@@ -1295,7 +1311,7 @@ function renderScanner(data) {
   els.scannerRows.innerHTML = rows
     .map(
       (row) => `
-        <tr>
+        <tr data-edge-id="${escapeHtml(edgeRowId(row))}">
           <td>${actionLabel(row.action)}</td>
           <td class="review-cell">${tierCell(row)}</td>
           <td class="review-cell">${reviewCell(row)}</td>
@@ -1681,7 +1697,7 @@ if (els.logModuleFilter) els.logModuleFilter.addEventListener("change", loadLogs
 if (els.edgeChart) {
   els.edgeChart.addEventListener("mousemove", (event) => {
     const point = edgePointAtEvent(event);
-    const nextId = point ? String(point.row.market_id || point.row.question) : null;
+    const nextId = point ? edgeRowId(point.row) : null;
     els.edgeChart.style.cursor = point ? "pointer" : "default";
     if (nextId !== edgeChartHoverId) {
       edgeChartHoverId = nextId;
@@ -1693,6 +1709,11 @@ if (els.edgeChart) {
     edgeChartHoverId = null;
     els.edgeChart.style.cursor = "default";
     drawEdgeChart(lastScanner?.opportunities || []);
+  });
+  els.edgeChart.addEventListener("click", (event) => {
+    const point = edgePointAtEvent(event);
+    if (!point) return;
+    scrollToScannerRow(edgeRowId(point.row));
   });
 }
 if (els.edgeOutliers) {
@@ -1706,6 +1727,11 @@ if (els.edgeOutliers) {
     if (!edgeChartHoverId) return;
     edgeChartHoverId = null;
     drawEdgeChart(lastScanner?.opportunities || []);
+  });
+  els.edgeOutliers.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-edge-id]");
+    if (!item) return;
+    scrollToScannerRow(item.dataset.edgeId);
   });
 }
 document.querySelectorAll(".scanner-table th.sortable").forEach((th) => {
