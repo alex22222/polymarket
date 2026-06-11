@@ -73,6 +73,7 @@ echo "Syncing code to $REMOTE:$REMOTE_DIR ..."
 rsync -az --delete --progress $DRY_RUN \
   -e "ssh -i $KEY" \
   --exclude ".git/" \
+  --exclude ".codex/" \
   --exclude ".venv/" \
   --exclude "__pycache__/" \
   --exclude "backups/" \

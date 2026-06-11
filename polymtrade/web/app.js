@@ -73,6 +73,12 @@ const els = {
   candidateReviewRoi: document.getElementById("candidateReviewRoi"),
   candidateReviewRows: document.getElementById("candidateReviewRows"),
   refreshCandidateReviewBtn: document.getElementById("refreshCandidateReviewBtn"),
+  tradeMeta: document.getElementById("tradeMeta"),
+  tradeModeStatus: document.getElementById("tradeModeStatus"),
+  tradeDraftCount: document.getElementById("tradeDraftCount"),
+  tradeDraftRows: document.getElementById("tradeDraftRows"),
+  tradeMasterSwitch: document.getElementById("tradeMasterSwitch"),
+  refreshTradeDraftsBtn: document.getElementById("refreshTradeDraftsBtn"),
   scanBtn: document.getElementById("scanBtn"),
   scannerRows: document.getElementById("scannerRows"),
   scannerMeta: document.getElementById("scannerMeta"),
@@ -86,6 +92,7 @@ const els = {
   scannerNear: document.getElementById("scannerNear"),
   scannerResearch: document.getElementById("scannerResearch"),
   scannerStatus: document.getElementById("scannerStatus"),
+  scannerTierBoard: document.getElementById("scannerTierBoard"),
   priceSource: document.getElementById("priceSource"),
   stackData: document.getElementById("stackData"),
   stackModel: document.getElementById("stackModel"),
@@ -106,11 +113,14 @@ const els = {
 let selectedAsset = "BTC";
 let lastPrices = [];
 let lastScanner = null;
+let lastPositionData = null;
+let lastRealPositionData = null;
 let edgeChartPoints = [];
 let edgeChartHoverId = null;
 let scannerSort = { field: null, dir: "asc" };
 let activeView = "overview";
 let activeValidationPanel = "positions";
+let tradingEnabled = localStorage.getItem("polymtradeTradingEnabled") === "1";
 
 function percent(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
@@ -184,6 +194,17 @@ async function apiJson(url, options) {
   return data;
 }
 
+function renderRealPositionsError(error) {
+  if (els.realPositionMeta) els.realPositionMeta.textContent = "真实持仓刷新失败";
+  if (!els.realPositionRows) return;
+  els.realPositionRows.innerHTML = `
+    <div class="coverage-row">
+      <strong>真实持仓暂不可用</strong>
+      <span>${escapeHtml(error?.message || "请求失败，请稍后重试。")}</span>
+    </div>
+  `;
+}
+
 function signedPercent(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
   const cls = Number(value) >= 0 ? "positive" : "negative";
@@ -235,6 +256,62 @@ function tierCell(row) {
     blocked: "negative-pill",
   }[tier] || "neutral-pill";
   return `<span class="pill ${cls}">${escapeHtml(label)}</span><small>${escapeHtml(row.opportunity_tier_reason || "")}</small>`;
+}
+
+function opportunityBucket(row) {
+  const tier = row.opportunity_tier || "";
+  const passed = row.review_status === "passed";
+  if (tier === "candidate" && row.action === "candidate" && passed) {
+    return "candidate";
+  }
+  if (tier === "near" || row.action === "verify" || row.review_status === "verify") {
+    return "near";
+  }
+  if (tier === "research" || row.action === "watch") {
+    return "research";
+  }
+  return "blocked";
+}
+
+function opportunityBucketLabel(bucket) {
+  return {
+    candidate: "候选",
+    near: "准候选",
+    research: "研究机会",
+    blocked: "阻断",
+  }[bucket] || "其他";
+}
+
+function opportunityBucketHint(bucket) {
+  return {
+    candidate: "可以进入 Paper Trading / 交易控制台；仍需人工确认盘口和限价。",
+    near: "有接近机会，但 edge 或盘口条件未完全达标；观察，不交易。",
+    research: "模型和市场有分歧，但执行条件不过；用于复盘训练。",
+    blocked: "到期、盘口、流动性或复核条件不通过；不交易。",
+  }[bucket] || "";
+}
+
+function renderScannerTierBoard(rows) {
+  if (!els.scannerTierBoard) return;
+  const counts = { candidate: 0, near: 0, research: 0 };
+  rows.forEach((row) => {
+    const bucket = opportunityBucket(row);
+    if (counts[bucket] !== undefined) counts[bucket] += 1;
+  });
+  const cards = [
+    ["candidate", "候选", "净 edge ≥ 2% 且盘口通过，可进入 Paper / 半自动草稿。"],
+    ["near", "准候选", "净 edge 1%-2% 或盘口小问题，只观察不交易。"],
+    ["research", "研究机会", "模型和市场有分歧，但执行条件不过，用于复盘。"],
+  ];
+  els.scannerTierBoard.innerHTML = cards
+    .map(([bucket, label, hint]) => `
+      <article class="tier-card tier-card-${bucket}">
+        <span>${label}</span>
+        <strong>${counts[bucket] || 0}</strong>
+        <small>${hint}</small>
+      </article>
+    `)
+    .join("");
 }
 
 function tradeDirectionCell(row) {
@@ -337,6 +414,20 @@ function contextSourceLabel(contexts = {}) {
   return `${items.map((item) => `${item.asset}:${item.source}`).join(" / ")} · ${live}`;
 }
 
+function compactContextSourceLabel(contexts = {}) {
+  const items = Object.values(contexts);
+  if (!items.length) return "--";
+  const assets = items.map((item) => item.asset).join("/");
+  const live = items.every((item) => item.spot_is_realtime) ? "live" : "daily";
+  const sources = [...new Set(items.map((item) => String(item.source || "").toLowerCase()))];
+  let source = sources.length === 1 ? sources[0] : "mixed";
+  if (source.includes("binance")) source = "Binance";
+  else if (source.includes("okx")) source = "OKX";
+  else if (source === "mixed") source = "mixed";
+  else source = source.replace(/-ticker$/, "") || "source";
+  return `${assets} · ${source} · ${live}`;
+}
+
 function contextFactorLabel(context) {
   if (!context) return "--";
   const state = context.market_state || {};
@@ -345,12 +436,12 @@ function contextFactorLabel(context) {
   const oi = state.open_interest || {};
   const macro = context.macro || {};
   const shortLabel = short.error
-    ? "5m unavailable"
-    : `5m 1h ${signedPercentText(short.momentum_1h)} / RV ${percent(short.rv)}`;
-  const fundingLabel = funding.error ? "funding unavailable" : `funding ${signedPercentText(funding.funding_rate)}`;
-  const oiLabel = oi.error ? "OI unavailable" : `OI ${compactMoney(oi.open_interest_usd)} / ${signedPercentText(oi.open_interest_change)}`;
+    ? "1h -- · RV --"
+    : `1h ${signedPercentText(short.momentum_1h)} · RV ${percent(short.rv)}`;
+  const fundingLabel = funding.error ? "fund --" : `fund ${signedPercentText(funding.funding_rate)}`;
+  const oiLabel = oi.error ? "OI --" : `OI ${signedPercentText(oi.open_interest_change)}`;
   const signals = (state.signals || []).slice(0, 2).join(" / ");
-  const activeMacro = macro.active_count ? `macro active ${macro.active_count}` : macro.upcoming_count ? `macro next ${macro.upcoming_count}` : "macro normal";
+  const activeMacro = macro.active_count ? `macro ${macro.active_count}` : macro.upcoming_count ? `macro ${macro.upcoming_count}` : "macro 0";
   return `${shortLabel} · ${fundingLabel} · ${oiLabel} · ${activeMacro}${signals ? ` · ${signals}` : ""}`;
 }
 
@@ -369,7 +460,7 @@ function renderValidationPanel() {
 function setActiveView(view) {
   const legacyViews = { analysis: "validation", research: "validation" };
   view = legacyViews[view] || view;
-  const allowed = new Set(["overview", "scanner", "validation", "system"]);
+  const allowed = new Set(["overview", "scanner", "trading", "validation", "system"]);
   activeView = allowed.has(view) ? view : "overview";
   document.querySelectorAll(".view-tab").forEach((button) => {
     button.classList.toggle("active", button.dataset.viewTab === activeView);
@@ -388,6 +479,9 @@ function setActiveView(view) {
   }
   if (activeView === "scanner") {
     drawEdgeChart(lastScanner?.opportunities || []);
+  }
+  if (activeView === "trading") {
+    renderTradeConsole();
   }
 }
 
@@ -630,16 +724,51 @@ function renderEdgeOutliers(rows) {
       const id = escapeHtml(edgeRowId(row));
       const gap = Number(row.model_probability) - Number(row.market_yes_price);
       const active = edgeChartHoverId === edgeRowId(row) ? " active" : "";
+      const explanation = edgeOutlierExplanation(row, gap);
       return `
         <button class="edge-outlier${active}" data-edge-id="${id}">
           <span class="edge-rank">图 ${index + 1}</span>
           <strong>${escapeHtml(row.trade_recommendation || (row.direction === "hit_below" ? "买 YES 下破" : "买 YES 上破"))}</strong>
           <span>${escapeHtml(row.asset)} · 市场 ${percent(row.market_yes_price)} · 模型 ${percent(row.model_probability)} · 差异 ${signedPercentText(gap)}</span>
           <small>${escapeHtml(shortQuestion(row.question, 92))}</small>
+          <span class="edge-explain">${escapeHtml(explanation)}</span>
         </button>
       `;
     })
     .join("");
+}
+
+function edgeOutlierExplanation(row, gap) {
+  const recommendation = row.trade_recommendation || (row.direction === "hit_below" ? "买 YES 下破" : "买 YES 上破");
+  const absGap = Math.abs(Number(gap) || 0);
+  const edgeText = gap >= 0
+    ? `模型比市场高 ${percent(absGap)}，意思是系统认为这边价格可能被低估。`
+    : `模型比市场低 ${percent(absGap)}，意思是系统认为市场可能太乐观。`;
+  const actionText = String(row.action || row.opportunity_tier || "").toLowerCase();
+  const discipline = actionText === "candidate"
+    ? "执行条件相对干净，可以优先复核盘口和滑点。"
+    : actionText === "verify" || actionText === "near"
+      ? "还没到直接交易级别，更适合继续观察。"
+      : "这更像研究样本，不应只因为偏离大就交易。";
+  const drift = Number(row.drift);
+  const driftText = Number.isFinite(drift) && Math.abs(drift) > 0.02
+    ? drift > 0
+      ? "趋势项偏顺风。"
+      : "趋势项偏逆风。"
+    : "趋势项没有给出很强方向。";
+  const state = row.market_state || {};
+  const short = state.short_term?.["5m"] || {};
+  const momentum1h = Number(short.momentum_1h);
+  const momentum4h = Number(short.momentum_4h);
+  const momentumText = Number.isFinite(momentum1h) || Number.isFinite(momentum4h)
+    ? `短线动能：1h ${signedPercentText(momentum1h)}，4h ${signedPercentText(momentum4h)}。`
+    : "";
+  const macro = row.macro_risk || {};
+  const labels = (row.macro_event_labels || macro.labels || []).slice(0, 2).join(" / ");
+  const macroText = macro.risk_level && macro.risk_level !== "normal"
+    ? `宏观风险偏高${labels ? `，附近有 ${labels}` : ""}。`
+    : "宏观事件压力不明显。";
+  return `${edgeText} 建议方向是“${recommendation}”。${discipline} ${driftText} ${momentumText} ${macroText}`;
 }
 
 function edgePointAtEvent(event) {
@@ -955,6 +1084,21 @@ function formatMacroDistance(hoursUntil) {
   return `${days.toFixed(1)} 天`;
 }
 
+function compactMacroSourceLabel(source) {
+  const value = String(source || "").trim();
+  if (!value) return "--";
+  if (value.includes("macro_events")) return "本地事件表";
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      return new URL(value).hostname.replace(/^www\./, "");
+    } catch (error) {
+      return "外部事件源";
+    }
+  }
+  const filename = value.split(/[\\/]/).filter(Boolean).pop();
+  return filename || value;
+}
+
 function renderMacroEvents(data = {}) {
   const events = data.upcoming || [];
   const active = data.active || [];
@@ -966,7 +1110,10 @@ function renderMacroEvents(data = {}) {
   if (els.macroActive) els.macroActive.textContent = active.length;
   if (els.macroUpcoming) els.macroUpcoming.textContent = events.length;
   if (els.macroHighImpact) els.macroHighImpact.textContent = highImpact;
-  if (els.macroSource) els.macroSource.textContent = data.source || "--";
+  if (els.macroSource) {
+    els.macroSource.textContent = compactMacroSourceLabel(data.source);
+    els.macroSource.title = data.source || "";
+  }
   if (!els.macroRows) return;
   if (!events.length && !active.length) {
     els.macroRows.innerHTML = `<div class="coverage-row"><strong>暂无宏观事件</strong><span>当前窗口内没有配置的 CPI / FOMC / 非农 / GDP。</span></div>`;
@@ -1170,6 +1317,7 @@ function externalLink(url, label) {
 }
 
 function renderPositions(data = {}) {
+  lastPositionData = data;
   const summary = data.summary || {};
   if (els.positionMeta) {
     const generated = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--";
@@ -1184,6 +1332,7 @@ function renderPositions(data = {}) {
   const rows = data.positions || [];
   if (!rows.length) {
     els.positionRows.innerHTML = `<div class="coverage-row"><strong>暂无开放持仓</strong><span>当前有效 Paper Trade 出现后，这里会复核退出机会。</span></div>`;
+    renderTradeConsole();
     return;
   }
   els.positionRows.innerHTML = rows
@@ -1206,6 +1355,7 @@ function renderPositions(data = {}) {
       </div>
     `)
     .join("");
+  renderTradeConsole();
 }
 
 function realPositionStatus(row) {
@@ -1216,6 +1366,7 @@ function realPositionStatus(row) {
 }
 
 function renderRealPositions(data = {}) {
+  lastRealPositionData = data;
   if (!els.realPositionRows) return;
   const rows = data.positions || [];
   const generated = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-CN") : "--";
@@ -1231,6 +1382,7 @@ function renderRealPositions(data = {}) {
   if (!rows.length) {
     const errors = (positionSource.errors || []).join("；");
     els.realPositionRows.innerHTML = `<div class="coverage-row"><strong>暂无真实持仓</strong><span>${escapeHtml(errors || "未从钱包 API 获取到持仓。")}</span></div>`;
+    renderTradeConsole();
     return;
   }
   els.realPositionRows.innerHTML = rows
@@ -1264,6 +1416,7 @@ function renderRealPositions(data = {}) {
       `;
     })
     .join("");
+  renderTradeConsole();
 }
 
 function renderCandidateReview(data = {}) {
@@ -1302,6 +1455,302 @@ function questionCell(row) {
   return `${escapeHtml(row.question)}${tradeLink}${sourceNote}`;
 }
 
+function tradeDraftRows() {
+  const rows = lastScanner?.opportunities || [];
+  return rows
+    .filter((row) => row.action === "candidate" && row.review_status === "passed" && row.opportunity_tier === "candidate")
+    .filter((row) => Number(row.minutes_to_expiry ?? 1) > 0)
+    .sort((a, b) => Number(b.net_edge || 0) - Number(a.net_edge || 0))
+    .slice(0, 8);
+}
+
+function tradeReviewRows() {
+  const rows = lastScanner?.opportunities || [];
+  return rows
+    .filter((row) => row.review_status !== "passed")
+    .filter((row) => ["near", "research", "blocked"].includes(row.opportunity_tier || "") || ["verify", "watch"].includes(row.action || ""))
+    .filter((row) => Number(row.minutes_to_expiry ?? 1) > 0)
+    .sort((a, b) => Number(b.net_edge || 0) - Number(a.net_edge || 0))
+    .slice(0, 6);
+}
+
+function exitDraftRows() {
+  const paperRows = (lastPositionData?.positions || [])
+    .filter((row) => ["exit", "review"].includes(row.recommendation) || Number(row.unrealized_return) >= 0.2)
+    .map((row) => ({ type: "paper", row }));
+  const realRows = (lastRealPositionData?.positions || [])
+    .filter((row) => (row.triggered_rules || []).length || Number(row.cash_pnl) > 0 || Number(row.percent_pnl) >= 0.2)
+    .map((row) => ({ type: "real", row }));
+  return [...paperRows, ...realRows]
+    .sort((a, b) => exitDraftPriority(b) - exitDraftPriority(a))
+    .slice(0, 8);
+}
+
+function exitDraftPriority(item) {
+  const row = item.row || {};
+  if (item.type === "paper") {
+    if (row.recommendation === "exit") return 100 + Number(row.unrealized_return || 0);
+    if (row.recommendation === "review") return 60 + Number(row.unrealized_return || 0);
+    return Number(row.unrealized_return || 0);
+  }
+  const triggered = (row.triggered_rules || []).length ? 80 : 0;
+  return triggered + Number(row.percent_pnl || 0);
+}
+
+function tradeDraftRisk(row) {
+  const checks = [];
+  const tier = row.opportunity_tier || "";
+  const fresh = row.pricing_source === "orderbook" && row.orderbook_is_fresh;
+  const completeFill = row.complete_fill !== false;
+  const edge = Number(row.net_edge);
+  const ask = tradeDraftPrice(row);
+  checks.push(fresh ? "盘口新鲜" : "盘口需复核");
+  checks.push(completeFill ? "可完整成交" : "可能部分成交");
+  checks.push(Number.isFinite(edge) && edge >= 0.02 ? "edge 达标" : "edge 偏低");
+  checks.push(Number.isFinite(ask) ? "限价可估" : "缺少限价");
+  const blocked = !fresh || !completeFill || !Number.isFinite(ask);
+  if (blocked) return { label: "需人工复核", cls: "warning-pill", checks };
+  if (tier === "candidate" || row.action === "candidate") return { label: "可半自动", cls: "positive-pill", checks };
+  return { label: "观察草稿", cls: "neutral-pill", checks };
+}
+
+function exitDraftRisk(item) {
+  const row = item.row || {};
+  if (item.type === "paper") {
+    if (row.recommendation === "exit") return { label: "应平仓", cls: "negative-pill", detail: (row.notes || []).join("；") || "退出条件触发" };
+    if (row.recommendation === "review") return { label: "复核止盈", cls: "warning-pill", detail: (row.notes || []).join("；") || "收益/盘口需要复核" };
+    return { label: "止盈观察", cls: "positive-pill", detail: "浮盈达到观察阈值" };
+  }
+  if ((row.triggered_rules || []).length) {
+    return { label: "规则触发", cls: "negative-pill", detail: row.triggered_rules.join("；") };
+  }
+  return { label: "止盈观察", cls: "positive-pill", detail: "真实持仓当前为正收益" };
+}
+
+function tradeDraftPrice(row) {
+  const values = [row.ask_price, row.executable_avg_price, row.best_ask, row.market_yes_price];
+  for (const value of values) {
+    const price = Number(value);
+    if (Number.isFinite(price) && price > 0) return price;
+  }
+  return NaN;
+}
+
+function exitDraftText(item) {
+  const row = item.row || {};
+  const risk = exitDraftRisk(item);
+  if (item.type === "paper") {
+    return [
+      "Polymtrade 半自动平仓草稿",
+      "类型: Paper 持仓",
+      `市场: ${row.question || "--"}`,
+      `资产: ${row.asset || "--"}`,
+      `建议: ${row.recommendation_label || risk.label}`,
+      `卖出参考: ${percent(row.current_best_bid)}`,
+      `入场: ${percent(row.entry_price)}`,
+      `未实现收益: ${signedPercentText(row.unrealized_return)}`,
+      `未实现 PnL: ${money(row.unrealized_pnl)}`,
+      `退出价值: ${money(row.exit_value)}`,
+      `理由: ${risk.detail || "--"}`,
+      `链接: ${row.market_url || "未找到具体市场链接"}`,
+    ].join("\n");
+  }
+  return [
+    "Polymtrade 半自动平仓草稿",
+    "类型: 真实持仓",
+    `市场: ${row.question || "--"}`,
+    `资产/方向: ${row.asset || "--"} ${row.side || ""}`,
+    `建议: ${risk.label}`,
+    `份数: ${row.shares ?? "--"}`,
+    `成本: ${money(row.initial_value)}`,
+    `当前价值: ${money(row.current_value)}`,
+    `PnL: ${money(row.cash_pnl)} / ${percent(row.percent_pnl)}`,
+    `当前合约价: ${percent(row.current_price)}`,
+    `现货/目标: ${money(row.spot)} / ${money(row.barrier)}`,
+    `理由: ${risk.detail || "--"}`,
+    `链接: ${row.portfolio_url || "未找到真实持仓链接"}`,
+  ].join("\n");
+}
+
+function tradeDraftText(row) {
+  const price = tradeDraftPrice(row);
+  const recommendation = row.trade_recommendation || (row.direction === "hit_below" ? "买 YES 下破" : "买 YES 上破");
+  return [
+    "Polymtrade 半自动订单草稿",
+    `市场: ${row.question || "--"}`,
+    `资产: ${row.asset || "--"}`,
+    `方向: ${recommendation}`,
+    `限价参考: ${Number.isFinite(price) ? percent(price) : "--"}`,
+    `建议最大单笔: $5`,
+    `模型概率: ${percent(row.model_probability)}`,
+    `市场价格: ${percent(row.market_yes_price)}`,
+    `净 Edge: ${signedPercentText(row.net_edge)}`,
+    `ROI: ${signedPercentText(row.roi)}`,
+    `现价/目标: ${money(row.spot)} / ${money(row.barrier)}`,
+    `到期: ${row.end_date || "--"}`,
+    `链接: ${row.market_url || "未找到具体市场链接"}`,
+  ].join("\n");
+}
+
+function updateTradingMode() {
+  if (els.tradeMasterSwitch) els.tradeMasterSwitch.checked = tradingEnabled;
+  if (els.tradeModeStatus) {
+    els.tradeModeStatus.textContent = tradingEnabled ? "半自动开启" : "关闭";
+    els.tradeModeStatus.className = tradingEnabled ? "positive" : "negative";
+  }
+  document.querySelectorAll("[data-trade-action]").forEach((button) => {
+    button.disabled = !tradingEnabled;
+    button.setAttribute("aria-disabled", tradingEnabled ? "false" : "true");
+    button.classList.toggle("disabled", !tradingEnabled);
+  });
+}
+
+function renderTradeConsole() {
+  const openRows = tradeDraftRows();
+  const reviewRows = tradeReviewRows();
+  const exitRows = exitDraftRows();
+  if (els.tradeDraftCount) els.tradeDraftCount.textContent = openRows.length + exitRows.length;
+  if (els.tradeMeta) {
+    const generated = lastScanner?.generated_at ? new Date(lastScanner.generated_at).toLocaleString("zh-CN") : "--";
+    els.tradeMeta.textContent = lastScanner ? `Scanner ${generated} · 可交易 ${openRows.length} / 复核 ${reviewRows.length} / 平仓 ${exitRows.length}` : `等待 Scanner · 平仓 ${exitRows.length}`;
+  }
+  if (!els.tradeDraftRows) return;
+  if (!lastScanner && !exitRows.length) {
+    els.tradeDraftRows.innerHTML = `<div class="coverage-row"><strong>等待 Scanner / 持仓</strong><span>运行 Scanner 生成开仓草稿；刷新持仓后生成止盈/平仓草稿。</span></div>`;
+    updateTradingMode();
+    return;
+  }
+  const openHtml = openRows.length ? openRows
+    .map((row, index) => {
+      const risk = tradeDraftRisk(row);
+      const recommendation = row.trade_recommendation || (row.direction === "hit_below" ? "买 YES 下破" : "买 YES 上破");
+      const price = tradeDraftPrice(row);
+      const url = row.market_url || "https://polym.trade/?category=crypto";
+      return `
+        <article class="trade-draft-card">
+          <div class="trade-draft-head">
+            <span class="edge-rank">单 ${index + 1}</span>
+            <strong>${escapeHtml(recommendation)} · ${escapeHtml(row.asset || "--")}</strong>
+            <span class="pill ${risk.cls}">${escapeHtml(risk.label)}</span>
+          </div>
+          <p>${escapeHtml(shortQuestion(row.question, 120))}</p>
+          <div class="trade-draft-grid">
+            <span>限价 <strong>${Number.isFinite(price) ? percent(price) : "--"}</strong></span>
+            <span>净 Edge <strong>${signedPercentText(row.net_edge)}</strong></span>
+            <span>ROI <strong>${signedPercentText(row.roi)}</strong></span>
+            <span>可成交 <strong>${money(row.executable_notional)}</strong></span>
+            <span>到期 <strong>${compactAge(row.minutes_to_expiry)}</strong></span>
+            <span>单笔上限 <strong>$5</strong></span>
+          </div>
+          <small>${escapeHtml(risk.checks.join(" · "))}</small>
+          <div class="trade-draft-actions">
+            <button class="secondary-btn" data-trade-action="copy" data-draft-type="open" data-draft-index="${index}">复制订单</button>
+            <a class="secondary-btn" data-trade-action="open" data-draft-type="open" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">打开市场</a>
+          </div>
+        </article>
+      `;
+    })
+    .join("") : `<div class="coverage-row"><strong>暂无可交易开仓草稿</strong><span>只有机会扫描里“候选 + 复核通过”的记录才会进入这里。</span></div>`;
+  const reviewHtml = reviewRows.length ? reviewRows
+    .map((row, index) => {
+      const blockers = row.review_blockers || [];
+      const reason = blockers[0] || row.opportunity_tier_reason || "未通过交易控制台开仓规则";
+      const bucket = opportunityBucket(row);
+      return `
+        <article class="trade-draft-card review-draft-card">
+          <div class="trade-draft-head">
+            <span class="edge-rank">核 ${index + 1}</span>
+            <strong>${escapeHtml(row.trade_recommendation || "--")} · ${escapeHtml(row.asset || "--")}</strong>
+            <span class="pill ${row.review_status === "blocked" ? "negative-pill" : "warning-pill"}">${escapeHtml(row.review_status === "blocked" ? "阻断" : "需复核")}</span>
+          </div>
+          <p>${escapeHtml(shortQuestion(row.question, 120))}</p>
+          <div class="trade-draft-grid">
+            <span>分层 <strong>${escapeHtml(opportunityBucketLabel(bucket))}</strong></span>
+            <span>复核 <strong>${escapeHtml(row.review_status || "--")}</strong></span>
+            <span>净 Edge <strong>${signedPercentText(row.net_edge)}</strong></span>
+            <span>ROI <strong>${signedPercentText(row.roi)}</strong></span>
+            <span>盘口 <strong>${escapeHtml(row.pricing_source || "--")}</strong></span>
+            <span>到期 <strong>${compactAge(row.minutes_to_expiry)}</strong></span>
+          </div>
+          <small>${escapeHtml(`${opportunityBucketHint(bucket)} ${reason}`.trim())}</small>
+        </article>
+      `;
+    })
+    .join("") : `<div class="coverage-row"><strong>暂无复核记录</strong><span>阻断和需复核记录不会生成交易动作。</span></div>`;
+  const exitHtml = exitRows.length ? exitRows
+    .map((item, index) => {
+      const row = item.row || {};
+      const risk = exitDraftRisk(item);
+      const url = item.type === "paper" ? row.market_url : row.portfolio_url;
+      const title = item.type === "paper"
+        ? `${row.asset || "--"} · ${row.recommendation_label || risk.label}`
+        : `${row.asset || "--"} ${row.side || ""} · ${risk.label}`;
+      const primaryMetric = item.type === "paper"
+        ? `未实现 ${signedPercentText(row.unrealized_return)} / ${money(row.unrealized_pnl)}`
+        : `PnL ${money(row.cash_pnl)} / ${percent(row.percent_pnl)}`;
+      return `
+        <article class="trade-draft-card exit-draft-card">
+          <div class="trade-draft-head">
+            <span class="edge-rank">平 ${index + 1}</span>
+            <strong>${escapeHtml(title)}</strong>
+            <span class="pill ${risk.cls}">${escapeHtml(risk.label)}</span>
+          </div>
+          <p>${escapeHtml(shortQuestion(row.question, 120))}</p>
+          <div class="trade-draft-grid">
+            <span>收益 <strong>${primaryMetric}</strong></span>
+            <span>卖出参考 <strong>${item.type === "paper" ? percent(row.current_best_bid) : percent(row.current_price)}</strong></span>
+            <span>成本 <strong>${item.type === "paper" ? percent(row.entry_price) : money(row.initial_value)}</strong></span>
+            <span>当前价值 <strong>${money(row.current_value ?? row.exit_value)}</strong></span>
+            <span>份数 <strong>${escapeHtml(row.shares ?? "--")}</strong></span>
+            <span>来源 <strong>${item.type === "paper" ? "Paper" : "真实"}</strong></span>
+          </div>
+          <small>${escapeHtml(risk.detail || "等待复核")}</small>
+          <div class="trade-draft-actions">
+            <button class="secondary-btn" data-trade-action="copy" data-draft-type="exit" data-draft-index="${index}">复制平仓</button>
+            <a class="secondary-btn" data-trade-action="open" data-draft-type="exit" href="${escapeHtml(url || "https://polym.trade/portfolio")}" target="_blank" rel="noopener noreferrer">打开持仓</a>
+          </div>
+        </article>
+      `;
+    })
+    .join("") : `<div class="coverage-row"><strong>暂无止盈/平仓草稿</strong><span>当前没有 Paper 或真实持仓触发止盈/退出观察。</span></div>`;
+  els.tradeDraftRows.innerHTML = `
+    <div class="trade-draft-group">
+      <div class="trade-draft-group-head"><strong>可交易开仓草稿</strong><span>${openRows.length} 条</span></div>
+      ${openHtml}
+    </div>
+    <div class="trade-draft-group">
+      <div class="trade-draft-group-head"><strong>阻断 / 复核记录</strong><span>${reviewRows.length} 条</span></div>
+      ${reviewHtml}
+    </div>
+    <div class="trade-draft-group">
+      <div class="trade-draft-group-head"><strong>止盈 / 平仓草稿</strong><span>${exitRows.length} 条</span></div>
+      ${exitHtml}
+    </div>
+  `;
+  updateTradingMode();
+}
+
+async function refreshTradeConsole() {
+  if (els.refreshTradeDraftsBtn) {
+    els.refreshTradeDraftsBtn.disabled = true;
+    els.refreshTradeDraftsBtn.textContent = "更新中...";
+  }
+  if (els.tradeMeta) els.tradeMeta.textContent = "正在刷新持仓与草稿";
+  try {
+    await loadPositions();
+    renderTradeConsole();
+    els.statusText.textContent = "交易草稿已更新";
+  } catch (error) {
+    renderTradeConsole();
+    els.statusText.textContent = `交易草稿更新失败：${error.message}`;
+  } finally {
+    if (els.refreshTradeDraftsBtn) {
+      els.refreshTradeDraftsBtn.disabled = false;
+      els.refreshTradeDraftsBtn.textContent = "更新草稿";
+    }
+  }
+}
+
 function sortValue(row, field) {
   if (field === "action") {
     const order = { candidate: 0, verify: 1, watch: 2, avoid: 3 };
@@ -1325,7 +1774,15 @@ function sortValue(row, field) {
 }
 
 function applySort(rows) {
-  if (!scannerSort.field) return rows;
+  if (!scannerSort.field) {
+    const order = { candidate: 0, near: 1, research: 2, blocked: 3 };
+    return [...rows].sort((a, b) => {
+      const av = order[opportunityBucket(a)] ?? 9;
+      const bv = order[opportunityBucket(b)] ?? 9;
+      if (av !== bv) return av - bv;
+      return Number(b.net_edge || 0) - Number(a.net_edge || 0);
+    });
+  }
   const { field, dir } = scannerSort;
   const mult = dir === "desc" ? -1 : 1;
   return [...rows].sort((a, b) => {
@@ -1350,6 +1807,7 @@ function renderScanner(data) {
   const summary = data.summary || {};
   const assumptions = data.assumptions || {};
   const rows = applySort(data.opportunities || []);
+  renderScannerTierBoard(data.opportunities || []);
   if (els.saveObservationBtn) els.saveObservationBtn.disabled = !rows.length;
   els.scannerCandidates.textContent = summary.candidates ?? "--";
   els.scannerBestEdge.innerHTML = signedPercent(summary.best_net_edge);
@@ -1364,7 +1822,8 @@ function renderScanner(data) {
   els.scannerStatus.textContent = summary.candidates > 0 ? "有候选" : summary.near_candidates > 0 ? "有准候选" : summary.research_opportunities > 0 ? "有研究机会" : "观察";
   els.scannerMeta.textContent = `${assumptions.model_probability_method || "GBM closed-form"} · ${assumptions.vol_window || "90d"} vol · MC ${assumptions.mc_diagnostic_paths || assumptions.simulations || 0} paths · 最小到期 ${assumptions.min_expiry_minutes ?? 30}m`;
   const contextSources = contextSourceLabel(data.contexts || {});
-  els.priceSource.textContent = contextSources || "--";
+  els.priceSource.textContent = compactContextSourceLabel(data.contexts || {});
+  els.priceSource.title = contextSources || "";
   const selectedVol = selectedContext?.volatility?.[assumptions.vol_window];
   els.stackData.textContent = contextSources || "无真实价格源";
   const ewmaVol = selectedContext?.ewma_volatility;
@@ -1378,13 +1837,22 @@ function renderScanner(data) {
     : `cached price · min liquidity ${money(assumptions.min_liquidity)} · macro ${summary.macro_risk_rows ?? 0}/${summary.macro_vol_adjusted ?? 0} · 不确定 ${summary.uncertain_edges ?? 0}`;
   drawEdgeChart(rows);
   drawPriceChart(lastPrices);
+  renderTradeConsole();
   if (!rows.length) {
     els.scannerRows.innerHTML = `<tr><td colspan="15">暂无可扫描市场</td></tr>`;
     return;
   }
+  let lastBucket = null;
   els.scannerRows.innerHTML = rows
     .map(
-      (row) => `
+      (row) => {
+        const bucket = opportunityBucket(row);
+        const section = scannerSort.field ? "" : bucket !== lastBucket
+          ? `<tr class="scanner-group-row"><td colspan="15"><strong>${escapeHtml(opportunityBucketLabel(bucket))}</strong><span>${escapeHtml(opportunityBucketHint(bucket))}</span></td></tr>`
+          : "";
+        lastBucket = bucket;
+        return `
+        ${section}
         <tr data-edge-id="${escapeHtml(edgeRowId(row))}">
           <td>${actionLabel(row.action)}</td>
           <td class="review-cell">${tierCell(row)}</td>
@@ -1402,7 +1870,8 @@ function renderScanner(data) {
           <td>${fillCell(row)}</td>
           <td>${money(row.liquidity)}</td>
         </tr>
-      `,
+      `;
+      },
     )
     .join("");
   updateSortIndicators();
@@ -1425,12 +1894,18 @@ async function loadVersion() {
   try {
     const data = await apiJson("/api/version");
     const version = data.version || data.sha || "--";
-    const source = data.source === "deploy" ? "deploy" : "local";
+    const environment = data.runtime_environment || (data.source === "deploy" ? "server" : "local");
+    const label = environment === "server" ? "服务器" : "本地";
     const deployed = data.deployed_at ? new Date(data.deployed_at).toLocaleString("zh-CN") : "";
-    els.versionBadge.textContent = `${source} ${version}`;
-    els.versionBadge.title = deployed ? `部署时间 ${deployed}` : "本地版本";
+    els.versionBadge.textContent = `${label} · ${version}`;
+    els.versionBadge.classList.toggle("server", environment === "server");
+    els.versionBadge.classList.toggle("local", environment !== "server");
+    els.versionBadge.title = environment === "server"
+      ? `服务器版本 · 部署时间 ${deployed || "--"}`
+      : "本地版本";
   } catch (error) {
     els.versionBadge.textContent = "version --";
+    els.versionBadge.classList.remove("server", "local");
     els.versionBadge.title = `版本信息读取失败：${error.message}`;
   }
 }
@@ -1514,18 +1989,31 @@ async function loadPositions() {
     els.refreshPositionsBtn.disabled = true;
     els.refreshPositionsBtn.textContent = "刷新中...";
   }
+  if (els.realPositionMeta) els.realPositionMeta.textContent = "正在刷新真实持仓";
   if (els.positionMeta) els.positionMeta.textContent = "正在刷新持仓";
   try {
-    const [realData, data] = await Promise.all([
+    const [realResult, positionResult] = await Promise.allSettled([
       apiJson("/api/real-positions?timeout=4&max_fallback_age_hours=36"),
       apiJson("/api/position-management?limit=100&stake=100&book_timeout=4&max_book_age_seconds=120"),
     ]);
-    renderRealPositions(realData);
+
+    if (realResult.status === "fulfilled") {
+      renderRealPositions(realResult.value);
+    } else {
+      renderRealPositionsError(realResult.reason);
+    }
+
+    if (positionResult.status !== "fulfilled") {
+      throw positionResult.reason;
+    }
+
+    const data = positionResult.value;
     renderPositions(data);
     const summary = data.summary || {};
-    const realAlerts = (realData.alerts || []).length;
+    const realAlerts = realResult.status === "fulfilled" ? (realResult.value.alerts || []).length : 0;
     els.statusText.textContent = `持仓管理已刷新：开放 ${summary.positions ?? 0} 条，观察退出 ${summary.review ?? 0} 条`;
     if (realAlerts) els.statusText.textContent += `，真实持仓触发 ${realAlerts} 条`;
+    if (realResult.status === "rejected") els.statusText.textContent += "，真实持仓刷新失败";
   } catch (error) {
     if (els.positionMeta) els.positionMeta.textContent = "刷新失败";
     els.statusText.textContent = `持仓管理刷新失败：${error.message}`;
@@ -1766,6 +2254,38 @@ if (els.refreshCalibrationBtn) els.refreshCalibrationBtn.addEventListener("click
 if (els.refreshPaperBtn) els.refreshPaperBtn.addEventListener("click", loadPaperTrading);
 if (els.refreshPositionsBtn) els.refreshPositionsBtn.addEventListener("click", loadPositions);
 if (els.refreshCandidateReviewBtn) els.refreshCandidateReviewBtn.addEventListener("click", loadCandidateReview);
+if (els.refreshTradeDraftsBtn) els.refreshTradeDraftsBtn.addEventListener("click", refreshTradeConsole);
+if (els.tradeMasterSwitch) {
+  els.tradeMasterSwitch.addEventListener("change", () => {
+    tradingEnabled = els.tradeMasterSwitch.checked;
+    localStorage.setItem("polymtradeTradingEnabled", tradingEnabled ? "1" : "0");
+    updateTradingMode();
+    els.statusText.textContent = tradingEnabled ? "交易控制台已开启半自动模式" : "交易控制台已关闭";
+  });
+}
+if (els.tradeDraftRows) {
+  els.tradeDraftRows.addEventListener("click", async (event) => {
+    const target = event.target.closest("[data-trade-action]");
+    if (!target) return;
+    if (!tradingEnabled) {
+      event.preventDefault();
+      els.statusText.textContent = "交易总开关关闭，未执行交易动作";
+      return;
+    }
+    if (target.dataset.tradeAction !== "copy") return;
+    const draftType = target.dataset.draftType || "open";
+    const draftIndex = Number(target.dataset.draftIndex);
+    const row = draftType === "exit" ? exitDraftRows()[draftIndex] : tradeDraftRows()[draftIndex];
+    if (!row) return;
+    event.preventDefault();
+    try {
+      await navigator.clipboard.writeText(draftType === "exit" ? exitDraftText(row) : tradeDraftText(row));
+      els.statusText.textContent = draftType === "exit" ? "平仓草稿已复制" : "订单草稿已复制";
+    } catch (error) {
+      els.statusText.textContent = `订单草稿复制失败：${error.message}`;
+    }
+  });
+}
 if (els.sendReportBtn) els.sendReportBtn.addEventListener("click", sendReport);
 if (els.logBtn) els.logBtn.addEventListener("click", () => toggleLogPanel(true));
 if (els.logPanelClose) els.logPanelClose.addEventListener("click", () => toggleLogPanel(false));
@@ -1847,5 +2367,6 @@ window.addEventListener("resize", () => {
   drawPriceChart(lastPrices);
   drawEdgeChart(lastScanner?.opportunities || []);
 });
+updateTradingMode();
 setActiveView(initialViewFromHash());
 loadDashboard();

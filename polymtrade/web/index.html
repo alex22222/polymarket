@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Polymtrade Research</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css?v=21" />
+    <link rel="stylesheet" href="/styles.css?v=28" />
   </head>
   <body>
     <main class="shell">
@@ -30,11 +30,12 @@
       <nav class="view-tabs" aria-label="模块视图">
         <button class="view-tab active" data-view-tab="overview">总览</button>
         <button class="view-tab" data-view-tab="scanner">机会扫描</button>
+        <button class="view-tab" data-view-tab="trading">交易控制台</button>
         <button class="view-tab" data-view-tab="validation">验证复盘</button>
         <button class="view-tab" data-view-tab="system">数据系统</button>
       </nav>
 
-      <section id="metricsPanel" class="metrics" aria-label="核心指标">
+      <section id="metricsPanel" class="metrics metrics-compact" aria-label="核心指标">
         <article>
           <span>候选</span>
           <strong id="scannerCandidates">--</strong>
@@ -51,10 +52,24 @@
           <span>扫描市场</span>
           <strong id="scannerScanned">--</strong>
         </article>
-        <article>
+        <article class="metric-source-card">
           <span>价格源</span>
           <strong id="priceSource">--</strong>
         </article>
+      </section>
+
+      <section class="real-position-section view-section" data-view="overview">
+        <div class="section-head">
+          <h2>真实持仓监控</h2>
+          <div class="actions compact">
+            <span id="realPositionMeta">等待刷新</span>
+            <a class="secondary-btn" href="https://polym.trade/portfolio?eventId=89502&amp;eventSlug=what-price-will-bitcoin-hit-before-2027&amp;eventSource=polymarket" target="_blank" rel="noopener noreferrer" title="打开真实 Polymtrade 持仓">真实持仓</a>
+            <button id="refreshPositionsBtn" class="secondary-btn">刷新持仓</button>
+          </div>
+        </div>
+        <div id="realPositionRows" class="position-rows">
+          <div class="coverage-row"><strong>暂无真实持仓监控</strong><span>刷新后显示真实仓位、实时价格和触发规则。</span></div>
+        </div>
       </section>
 
       <section class="workspace view-section" data-view="overview">
@@ -81,7 +96,7 @@
             <article><span>活跃窗口</span><strong id="macroActive">--</strong></article>
             <article><span>未来事件</span><strong id="macroUpcoming">--</strong></article>
             <article><span>高影响</span><strong id="macroHighImpact">--</strong></article>
-            <article><span>数据源</span><strong id="macroSource">--</strong></article>
+            <article class="macro-source-card"><span>数据源</span><strong id="macroSource">--</strong></article>
           </div>
           <div id="macroRows" class="macro-rows">
             <div class="coverage-row"><strong>等待事件</strong><span>未来 CPI / FOMC / 非农 / GDP 会在这里展示。</span></div>
@@ -192,20 +207,6 @@
           <div><span>模型</span><strong id="stackModel">Monte Carlo Touch Probability</strong></div>
           <div><span>成本</span><strong id="stackCost">等待参数</strong></div>
           <div><span>执行</span><strong id="stackExecution">只读观察</strong></div>
-        </div>
-      </section>
-
-      <section class="real-position-section view-section" data-view="overview">
-        <div class="section-head">
-          <h2>真实持仓监控</h2>
-          <div class="actions compact">
-            <span id="realPositionMeta">等待刷新</span>
-            <a class="secondary-btn" href="https://polym.trade/portfolio?eventId=89502&amp;eventSlug=what-price-will-bitcoin-hit-before-2027&amp;eventSource=polymarket" target="_blank" rel="noopener noreferrer" title="打开真实 Polymtrade 持仓">真实持仓</a>
-            <button id="refreshPositionsBtn" class="secondary-btn">刷新持仓</button>
-          </div>
-        </div>
-        <div id="realPositionRows" class="position-rows">
-          <div class="coverage-row"><strong>暂无真实持仓监控</strong><span>刷新后显示真实仓位、实时价格和触发规则。</span></div>
         </div>
       </section>
 
@@ -372,6 +373,23 @@
             <strong id="scannerStatus">--</strong>
           </article>
         </div>
+        <div id="scannerTierBoard" class="scanner-tier-board">
+          <article class="tier-card tier-card-candidate">
+            <span>候选</span>
+            <strong>--</strong>
+            <small>净 edge ≥ 2% 且盘口通过，可进入 Paper / 半自动草稿。</small>
+          </article>
+          <article class="tier-card tier-card-near">
+            <span>准候选</span>
+            <strong>--</strong>
+            <small>净 edge 1%-2% 或盘口小问题，只观察不交易。</small>
+          </article>
+          <article class="tier-card tier-card-research">
+            <span>研究机会</span>
+            <strong>--</strong>
+            <small>模型和市场有分歧，但执行条件不过，用于复盘。</small>
+          </article>
+        </div>
         <div class="edge-panel">
           <div class="section-head">
             <h2>模型概率 vs 市场概率</h2>
@@ -406,6 +424,38 @@
         </div>
       </section>
 
+      <section class="trading-section view-section hidden" data-view="trading">
+        <div class="section-head">
+          <h2>交易控制台</h2>
+          <div class="actions compact">
+            <span id="tradeMeta">等待 Scanner</span>
+            <button id="refreshTradeDraftsBtn" class="secondary-btn">更新草稿</button>
+          </div>
+        </div>
+        <div class="trade-control-panel">
+          <label class="trade-master-switch">
+            <input id="tradeMasterSwitch" type="checkbox" />
+            <span></span>
+            <strong>总开关</strong>
+          </label>
+          <div>
+            <span>模式</span>
+            <strong id="tradeModeStatus">关闭</strong>
+          </div>
+          <div>
+            <span>草稿</span>
+            <strong id="tradeDraftCount">--</strong>
+          </div>
+          <div>
+            <span>最大单笔</span>
+            <strong>$5</strong>
+          </div>
+        </div>
+        <div id="tradeDraftRows" class="trade-draft-rows">
+          <div class="coverage-row"><strong>暂无订单草稿</strong><span>运行 Scanner 后显示通过风控的半自动交易草稿。</span></div>
+        </div>
+      </section>
+
       <div id="logPanel" class="log-panel-overlay hidden">
         <div class="log-panel">
           <div class="log-panel-header">
@@ -436,8 +486,8 @@
         </div>
       </div>
 
-      <p id="statusText" class="status-line">读取本地数据库</p>
+      <p id="statusText" class="status-line" aria-live="polite">读取本地数据库</p>
     </main>
-    <script src="/app.js?v=57"></script>
+    <script src="/app.js?v=65"></script>
   </body>
 </html>

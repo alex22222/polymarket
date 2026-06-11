@@ -71,10 +71,11 @@ def version_info() -> dict:
         try:
             payload = json.loads(VERSION_PATH.read_text(encoding="utf-8"))
             if isinstance(payload, dict):
+                payload.setdefault("runtime_environment", "server" if payload.get("source") == "deploy" else "local")
                 return payload
         except (OSError, json.JSONDecodeError):
             pass
-    info = {"version": "local", "sha": None, "branch": None, "deployed_at": None, "source": "local"}
+    info = {"version": "local", "sha": None, "branch": None, "deployed_at": None, "source": "local", "runtime_environment": "local"}
     try:
         sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT.parent, text=True).strip()
         branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=ROOT.parent, text=True).strip()
