@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Polymtrade Research</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css?v=28" />
+    <link rel="stylesheet" href="/styles.css?v=29" />
   </head>
   <body>
     <main class="shell">
@@ -72,36 +72,34 @@
         </div>
       </section>
 
-      <section class="workspace view-section" data-view="overview">
-        <div class="chart-panel">
-          <div class="section-head">
-            <h2>价格序列</h2>
-            <div class="segmented" aria-label="资产切换">
-              <button class="asset-toggle active" data-asset="BTC">BTC</button>
-              <button class="asset-toggle" data-asset="ETH">ETH</button>
-            </div>
+      <section class="chart-panel overview-price-panel view-section" data-view="overview">
+        <div class="section-head">
+          <h2>价格序列</h2>
+          <div class="segmented" aria-label="资产切换">
+            <button class="asset-toggle active" data-asset="BTC">BTC</button>
+            <button class="asset-toggle" data-asset="ETH">ETH</button>
           </div>
-          <canvas id="priceChart" width="1100" height="420"></canvas>
         </div>
+        <canvas id="priceChart" width="1100" height="420"></canvas>
+      </section>
 
-        <aside class="side-panel overview-macro-panel">
-          <div class="section-head">
-            <h2>宏观事件</h2>
-            <div class="actions compact">
-              <span id="macroMeta">等待事件日历</span>
-              <button id="refreshMacroBtn" class="secondary-btn">刷新事件</button>
-            </div>
+      <section class="macro-section overview-macro-panel view-section" data-view="overview">
+        <div class="section-head">
+          <h2>宏观事件</h2>
+          <div class="actions compact">
+            <span id="macroMeta">等待事件日历</span>
+            <button id="refreshMacroBtn" class="secondary-btn">刷新事件</button>
           </div>
-          <div class="quality-summary compact-summary">
-            <article><span>活跃窗口</span><strong id="macroActive">--</strong></article>
-            <article><span>未来事件</span><strong id="macroUpcoming">--</strong></article>
-            <article><span>高影响</span><strong id="macroHighImpact">--</strong></article>
-            <article class="macro-source-card"><span>数据源</span><strong id="macroSource">--</strong></article>
-          </div>
-          <div id="macroRows" class="macro-rows">
-            <div class="coverage-row"><strong>等待事件</strong><span>未来 CPI / FOMC / 非农 / GDP 会在这里展示。</span></div>
-          </div>
-        </aside>
+        </div>
+        <div class="quality-summary compact-summary">
+          <article><span>活跃窗口</span><strong id="macroActive">--</strong></article>
+          <article><span>未来事件</span><strong id="macroUpcoming">--</strong></article>
+          <article><span>高影响</span><strong id="macroHighImpact">--</strong></article>
+          <article class="macro-source-card"><span>数据源</span><strong id="macroSource">--</strong></article>
+        </div>
+        <div id="macroRows" class="macro-rows">
+          <div class="coverage-row"><strong>等待事件</strong><span>未来 CPI / FOMC / 非农 / GDP 会在这里展示。</span></div>
+        </div>
       </section>
 
       <section class="data-section view-section hidden" data-view="system">

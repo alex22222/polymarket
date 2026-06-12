@@ -337,6 +337,10 @@ h2 {
   align-items: stretch;
 }
 
+.overview-price-panel {
+  margin-top: 0;
+}
+
 .chart-panel,
 .side-panel,
 .edge-panel,
@@ -450,13 +454,13 @@ canvas {
 }
 
 .overview-macro-panel .compact-summary {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
 }
 
 .overview-macro-panel .quality-summary article {
-  min-height: 58px;
-  padding: 9px 10px;
+  min-height: 64px;
+  padding: 10px 12px;
 }
 
 .overview-macro-panel .quality-summary strong {
@@ -470,6 +474,10 @@ canvas {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.overview-macro-panel .macro-rows {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
 
 .table-section {
