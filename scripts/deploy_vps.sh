@@ -147,9 +147,21 @@ VERSION_JSON
   fi
   systemctl restart '$SERVICE'
   sudo -u $REMOTE_USER .venv/bin/python3 - <<'PY'
+import sqlite3
+import time
+
 from polymtrade.storage.db import connect, insert_log
-with connect('polymtrade.sqlite') as conn:
-    insert_log(conn, 'INFO', 'deploy', 'Deploy completed: $DEPLOY_VERSION', '$DEPLOY_AT branch=$DEPLOY_BRANCH sha=$DEPLOY_SHA')
+
+for attempt in range(5):
+    try:
+        with connect('polymtrade.sqlite') as conn:
+            insert_log(conn, 'INFO', 'deploy', 'Deploy completed: $DEPLOY_VERSION', '$DEPLOY_AT branch=$DEPLOY_BRANCH sha=$DEPLOY_SHA')
+        break
+    except sqlite3.OperationalError as exc:
+        if 'locked' not in str(exc).lower() or attempt == 4:
+            print(f'WARN: deploy log insert skipped: {exc}')
+            break
+        time.sleep(1.5)
 PY
   systemctl status '$SERVICE' --no-pager
 "
