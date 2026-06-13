@@ -69,6 +69,15 @@ echo "Local checks..."
 python3 -m compileall -q polymtrade
 node --check polymtrade/web/app.js
 
+SPEC_PRESERVE="/tmp/polymtrade_spec_preserve_${DEPLOY_AT//[^0-9A-Za-z]/_}.md"
+if [[ -z "$DRY_RUN" ]]; then
+  ssh -i "$KEY" "$REMOTE" "set -euo pipefail
+    if [[ -f '$REMOTE_DIR/docs/SPEC.md' ]]; then
+      cp '$REMOTE_DIR/docs/SPEC.md' '$SPEC_PRESERVE'
+    fi
+  "
+fi
+
 echo "Syncing code to $REMOTE:$REMOTE_DIR ..."
 rsync -az --delete --progress $DRY_RUN \
   -e "ssh -i $KEY" \
@@ -99,6 +108,33 @@ echo "Applying ownership, verifying remote code, and restarting service..."
 ssh -i "$KEY" "$REMOTE" "set -euo pipefail
   chown -R $REMOTE_USER:$REMOTE_USER '$REMOTE_DIR'
   cd '$REMOTE_DIR'
+  if [[ -f '$SPEC_PRESERVE' && -f docs/SPEC.md ]]; then
+    sudo -u $REMOTE_USER env SPEC_PRESERVE='$SPEC_PRESERVE' .venv/bin/python3 - <<'PY'
+import os
+import re
+from pathlib import Path
+
+target = Path('docs/SPEC.md')
+preserve = Path(os.environ['SPEC_PRESERVE'])
+current = target.read_text(encoding='utf-8')
+old = preserve.read_text(encoding='utf-8')
+
+def section(text: str, start: str, end: str) -> str | None:
+    match = re.search(rf'{re.escape(start)}.*?{re.escape(end)}', text, re.S)
+    return match.group(0) if match else None
+
+for start, end in (
+    ('<!-- AUTO_SPEC_SNAPSHOT:START -->', '<!-- AUTO_SPEC_SNAPSHOT:END -->'),
+    ('<!-- AUTO_REFLECTION_LOG:START -->', '<!-- AUTO_REFLECTION_LOG:END -->'),
+):
+    old_section = section(old, start, end)
+    if old_section:
+        current = re.sub(rf'{re.escape(start)}.*?{re.escape(end)}', old_section, current, flags=re.S)
+
+target.write_text(current, encoding='utf-8')
+PY
+    rm -f '$SPEC_PRESERVE'
+  fi
   cat > .deploy_version.json <<'VERSION_JSON'
 {\"version\":\"$DEPLOY_VERSION\",\"sha\":\"$DEPLOY_SHA\",\"branch\":\"$DEPLOY_BRANCH\",\"deployed_at\":\"$DEPLOY_AT\",\"source\":\"deploy\"}
 VERSION_JSON

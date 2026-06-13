@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import subprocess
 import json
+from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from polymtrade.data.crypto_prices import fetch_best_daily
+from polymtrade.data.crypto_prices import fetch_best_daily, fetch_best_spot
 from polymtrade.data.macro_events import macro_context
 from polymtrade.data.polymarket_api import (
     fetch_gamma_markets,
@@ -39,7 +40,9 @@ from polymtrade.storage.db import (
     insert_scanner_observation_run,
     latest_scanner_observation_runs,
     latest_scanner_observations,
+    reflection_todo_report,
     scanner_observation_summary,
+    update_reflection_todo,
     upsert_candle_anomaly_review,
     upsert_candles,
     upsert_barrier_markets,
@@ -84,6 +87,111 @@ def version_info() -> dict:
     except Exception:
         pass
     return info
+
+
+def data_trust_status(conn) -> dict:
+    now = datetime.now(timezone.utc)
+    components: list[dict] = []
+
+    tickers = []
+    for asset in ("BTC", "ETH"):
+        quote, errors = fetch_best_spot(asset, timeout=3)
+        tickers.append({"asset": asset, "quote": quote, "errors": errors})
+    realtime_assets = [item["asset"] for item in tickers if item["quote"]]
+    price_status = "healthy" if len(realtime_assets) == 2 else "blocked"
+    components.append(
+        {
+            "key": "price",
+            "label": "价格",
+            "status": price_status,
+            "summary": f"实时 {len(realtime_assets)}/2",
+            "detail": " / ".join(f"{item['asset']}:{item['quote'].source if item['quote'] else '失败'}" for item in tickers),
+        }
+    )
+
+    candle_rows = candle_summary(conn)
+    selected_candles = {
+        str(row.get("asset")): row
+        for row in candle_rows
+        if row.get("selected") and row.get("interval") == "1d"
+    }
+    stale_hours: list[float] = []
+    candle_bits = []
+    for asset in ("BTC", "ETH"):
+        rec = selected_candles.get(asset) or next(
+            (
+                row
+                for row in candle_rows
+                if row.get("asset") == asset and row.get("interval") == "1d"
+            ),
+            {},
+        )
+        stale_days = rec.get("stale_days")
+        hours = float(stale_days) * 24.0 if stale_days is not None else None
+        if hours is not None:
+            stale_hours.append(hours)
+        candle_bits.append(f"{asset}:{rec.get('source') or '--'} {stale_days if stale_days is not None else '--'}d")
+    max_stale = max(stale_hours) if stale_hours else None
+    candle_status = "healthy" if max_stale is not None and max_stale <= 24 else "blocked"
+    components.append(
+        {
+            "key": "candles",
+            "label": "K线",
+            "status": candle_status,
+            "summary": f"{max_stale:.0f}h 前" if max_stale is not None else "不可用",
+            "detail": " / ".join(candle_bits),
+        }
+    )
+
+    health = automation_health(conn, max_age_minutes=150)
+    age = health.get("age_minutes")
+    automation_status = "healthy" if health.get("status") == "healthy" else "degraded" if health.get("status") == "stale" else "blocked"
+    components.append(
+        {
+            "key": "automation",
+            "label": "自动化",
+            "status": automation_status,
+            "summary": f"{age:.0f}m 前" if isinstance(age, (int, float)) else "无记录",
+            "detail": health.get("latest", {}).get("message") if isinstance(health.get("latest"), dict) else "",
+        }
+    )
+
+    latest_detail = (health.get("latest") or {}).get("detail_json") if isinstance(health.get("latest"), dict) else None
+    scanner_summary = (((latest_detail or {}).get("scanner") or {}).get("payload") or {}).get("summary") or {}
+    priced = scanner_summary.get("orderbook_priced")
+    stale_books = scanner_summary.get("stale_orderbooks")
+    book_status = "healthy" if priced and not stale_books else "degraded" if priced else "blocked"
+    components.append(
+        {
+            "key": "orderbook",
+            "label": "盘口",
+            "status": book_status,
+            "summary": f"{priced or 0} 个 / 过期 {stale_books or 0}",
+            "detail": "最近一次 scanner 盘口抽样",
+        }
+    )
+
+    macro = macro_context(now=now, horizon_hours=720)
+    upcoming = int(macro.get("upcoming_count") or 0)
+    high = sum(1 for event in macro.get("upcoming", []) if event.get("impact") == "high")
+    macro_status = "healthy" if upcoming else "degraded"
+    components.append(
+        {
+            "key": "macro",
+            "label": "宏观",
+            "status": macro_status,
+            "summary": f"{upcoming} 条 / 高影响 {high}",
+            "detail": "未来 30 天事件日历",
+        }
+    )
+
+    if any(item["status"] == "blocked" for item in components):
+        overall = "blocked"
+    elif any(item["status"] == "degraded" for item in components):
+        overall = "degraded"
+    else:
+        overall = "healthy"
+    return {"generated_at": now.isoformat(), "status": overall, "components": components}
 
 
 class AppHandler(SimpleHTTPRequestHandler):
@@ -184,6 +292,26 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.log_event("ERROR", "report", f"Feishu report failed: {exc}")
                 self.send_json({"ok": False, "error": str(exc)}, status=502)
             return
+        if path == "/api/reflection-todos":
+            try:
+                length = int(self.headers.get("content-length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                todo_id = int(payload.get("id") or 0)
+                if todo_id <= 0:
+                    raise ValueError("missing todo id")
+                status = str(payload.get("status") or "open")
+                note = str(payload.get("note") or "").strip() or None
+                with connect(DB_PATH) as conn:
+                    row = update_reflection_todo(conn, todo_id, status=status, note=note)
+                    if not row:
+                        raise ValueError(f"todo not found: {todo_id}")
+                    report = reflection_todo_report(conn)
+                    insert_log(conn, "INFO", "reflection", f"Reflection TODO updated: #{todo_id} -> {status}", json.dumps(row, ensure_ascii=False))
+                self.send_json({"ok": True, "todo": row, "report": report})
+            except Exception as exc:
+                self.log_event("ERROR", "reflection", f"Reflection TODO update failed: {exc}")
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
         self.send_json({"ok": False, "error": "POST not supported for this path"}, status=405)
 
     def do_GET(self) -> None:
@@ -225,9 +353,46 @@ class AppHandler(SimpleHTTPRequestHandler):
                     }
                 )
             return
+        if path == "/api/crypto-tickers":
+            assets = [item.strip().upper() for item in query.get("assets", ["BTC,ETH"])[0].split(",") if item.strip()]
+            limit = query_int(query, "limit", 60)
+            timeout = query_int(query, "timeout", 3)
+            tickers = []
+            with connect(DB_PATH) as conn:
+                for asset in assets:
+                    candles = candles_for_asset(conn, asset, None, limit)
+                    quote, errors = fetch_best_spot(asset, timeout=timeout)
+                    latest_close = float(candles[-1]["close"]) if candles else None
+                    previous_close = float(candles[-2]["close"]) if len(candles) > 1 else None
+                    price = quote.price if quote else latest_close
+                    change = None
+                    change_pct = None
+                    if price is not None and previous_close:
+                        change = float(price) - previous_close
+                        change_pct = change / previous_close
+                    tickers.append(
+                        {
+                            "asset": asset,
+                            "price": price,
+                            "source": quote.source if quote else (candles[-1]["source"] if candles else None),
+                            "fetched_at": quote.fetched_at if quote else (candles[-1]["ts"] if candles else None),
+                            "is_realtime": bool(quote),
+                            "previous_close": previous_close,
+                            "change": change,
+                            "change_pct": change_pct,
+                            "candles": candles,
+                            "errors": errors,
+                        }
+                    )
+            self.send_json({"tickers": tickers})
+            return
         if path == "/api/data-quality":
             with connect(DB_PATH) as conn:
                 self.send_json(data_quality_report(conn))
+            return
+        if path == "/api/data-trust":
+            with connect(DB_PATH) as conn:
+                self.send_json(data_trust_status(conn))
             return
         if path == "/api/candle-anomalies":
             threshold = float(query.get("threshold", ["0.25"])[0])
@@ -237,6 +402,11 @@ class AppHandler(SimpleHTTPRequestHandler):
         if path == "/api/report-preview":
             with connect(DB_PATH) as conn:
                 self.send_json({"ok": True, "channel": "feishu", "text": build_research_report(conn)})
+            return
+        if path == "/api/reflection-todos":
+            limit = int(query.get("limit", ["100"])[0])
+            with connect(DB_PATH) as conn:
+                self.send_json(reflection_todo_report(conn, limit=limit))
             return
         if path == "/api/scanner-observations":
             limit = int(query.get("limit", ["25"])[0])

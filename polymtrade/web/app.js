@@ -4,6 +4,13 @@ const els = {
   metricsPanel: document.getElementById("metricsPanel"),
   statusText: document.getElementById("statusText"),
   versionBadge: document.getElementById("versionBadge"),
+  dataTrustBadge: document.getElementById("dataTrustBadge"),
+  btcTickerPrice: document.getElementById("btcTickerPrice"),
+  btcTickerChange: document.getElementById("btcTickerChange"),
+  btcTickerSparkline: document.getElementById("btcTickerSparkline"),
+  ethTickerPrice: document.getElementById("ethTickerPrice"),
+  ethTickerChange: document.getElementById("ethTickerChange"),
+  ethTickerSparkline: document.getElementById("ethTickerSparkline"),
   priceChart: document.getElementById("priceChart"),
   edgeChart: document.getElementById("edgeChart"),
   edgeOutliers: document.getElementById("edgeOutliers"),
@@ -38,6 +45,13 @@ const els = {
   macroSource: document.getElementById("macroSource"),
   macroRows: document.getElementById("macroRows"),
   refreshMacroBtn: document.getElementById("refreshMacroBtn"),
+  reflectionMeta: document.getElementById("reflectionMeta"),
+  reflectionRuns: document.getElementById("reflectionRuns"),
+  reflectionTodos: document.getElementById("reflectionTodos"),
+  reflectionOpen: document.getElementById("reflectionOpen"),
+  reflectionDone: document.getElementById("reflectionDone"),
+  reflectionRows: document.getElementById("reflectionRows"),
+  refreshReflectionBtn: document.getElementById("refreshReflectionBtn"),
   calibrationMeta: document.getElementById("calibrationMeta"),
   calibrationSamples: document.getElementById("calibrationSamples"),
   calibrationResolved: document.getElementById("calibrationResolved"),
@@ -115,6 +129,7 @@ let lastPrices = [];
 let lastScanner = null;
 let lastPositionData = null;
 let lastRealPositionData = null;
+let lastTickers = [];
 let edgeChartPoints = [];
 let edgeChartHoverId = null;
 let scannerSort = { field: null, dir: "asc" };
@@ -144,6 +159,16 @@ function compactMoney(value) {
   if (Math.abs(amount) >= 1_000_000) return `$${(amount / 1_000_000).toFixed(1)}M`;
   if (Math.abs(amount) >= 1_000) return `$${(amount / 1_000).toFixed(1)}K`;
   return money(amount);
+}
+
+function marketMoney(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+  const amount = Number(value);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: amount >= 1000 ? 0 : 2,
+  }).format(amount);
 }
 
 function edgeDislocation(row) {
@@ -589,6 +614,111 @@ function drawPriceChart(candles) {
   ctx.fillText(`${selectedAsset} ${money(values[values.length - 1])}`, pad, pad - 10);
   ctx.fillStyle = "#65736d";
   ctx.fillText(`${values.length} daily candles`, width - pad - 112, height - 10);
+}
+
+function drawSparkline(canvas, candles = [], price = null, tone = "neutral") {
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(120, Math.floor((rect.width || 180) * dpr));
+  const height = Math.max(42, Math.floor((rect.height || 54) * dpr));
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  const w = width / dpr;
+  const h = height / dpr;
+  ctx.clearRect(0, 0, w, h);
+  const values = candles.map((item) => Number(item.close)).filter(Number.isFinite).slice(-48);
+  const live = Number(price);
+  if (Number.isFinite(live)) {
+    if (values.length) values[values.length - 1] = live;
+    else values.push(live);
+  }
+  if (values.length < 2) {
+    ctx.fillStyle = "#65736d";
+    ctx.font = "12px system-ui";
+    ctx.fillText("暂无走势", 10, h / 2 + 4);
+    return;
+  }
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = Math.max(1, max - min);
+  const pad = 5;
+  const xFor = (index) => pad + ((w - pad * 2) * index) / Math.max(1, values.length - 1);
+  const yFor = (value) => h - pad - ((h - pad * 2) * (value - min)) / range;
+  const color = tone === "up" ? "#0f7a55" : tone === "down" ? "#b4233a" : "#2757a7";
+  const gradient = ctx.createLinearGradient(0, 0, 0, h);
+  gradient.addColorStop(0, tone === "down" ? "rgba(180,35,58,0.18)" : "rgba(15,122,85,0.18)");
+  gradient.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.beginPath();
+  values.forEach((value, index) => {
+    const x = xFor(index);
+    const y = yFor(value);
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(xFor(values.length - 1), h - pad);
+  ctx.lineTo(xFor(0), h - pad);
+  ctx.closePath();
+  ctx.fillStyle = gradient;
+  ctx.fill();
+  ctx.beginPath();
+  values.forEach((value, index) => {
+    const x = xFor(index);
+    const y = yFor(value);
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function renderTicker(ticker) {
+  const asset = String(ticker.asset || "").toUpperCase();
+  const priceEl = asset === "BTC" ? els.btcTickerPrice : els.ethTickerPrice;
+  const changeEl = asset === "BTC" ? els.btcTickerChange : els.ethTickerChange;
+  const canvas = asset === "BTC" ? els.btcTickerSparkline : els.ethTickerSparkline;
+  const card = document.querySelector(`[data-ticker-card="${asset}"]`);
+  if (!priceEl || !changeEl) return;
+  const changePct = Number(ticker.change_pct);
+  const tone = Number.isFinite(changePct) && changePct > 0 ? "up" : Number.isFinite(changePct) && changePct < 0 ? "down" : "neutral";
+  priceEl.textContent = marketMoney(ticker.price);
+  changeEl.textContent = Number.isFinite(changePct)
+    ? `${signedPercentText(changePct)} · ${ticker.is_realtime ? "实时" : "缓存"} · ${ticker.source || "--"}`
+    : `${ticker.is_realtime ? "实时" : "缓存"} · ${ticker.source || "--"}`;
+  changeEl.className = tone === "up" ? "positive" : tone === "down" ? "negative" : "";
+  if (card) {
+    card.classList.toggle("market-up", tone === "up");
+    card.classList.toggle("market-down", tone === "down");
+  }
+  drawSparkline(canvas, ticker.candles || [], ticker.price, tone);
+}
+
+async function loadMarketTickers() {
+  const data = await apiJson("/api/crypto-tickers?assets=BTC,ETH&limit=60&timeout=3");
+  lastTickers = data.tickers || [];
+  lastTickers.forEach(renderTicker);
+}
+
+function renderDataTrust(data = {}) {
+  if (!els.dataTrustBadge) return;
+  const status = data.status || "unknown";
+  const label = status === "healthy" ? "数据正常" : status === "degraded" ? "数据降级" : status === "blocked" ? "数据阻断" : "数据未知";
+  const components = data.components || [];
+  const summary = components.map((item) => `${item.label}:${item.summary}`).join(" · ");
+  const detail = components.map((item) => `${item.label} ${item.status} - ${item.detail || item.summary}`).join("\n");
+  els.dataTrustBadge.textContent = summary ? `${label} · ${summary}` : label;
+  els.dataTrustBadge.title = detail || "暂无数据可信状态";
+  els.dataTrustBadge.classList.toggle("healthy", status === "healthy");
+  els.dataTrustBadge.classList.toggle("degraded", status === "degraded");
+  els.dataTrustBadge.classList.toggle("blocked", status === "blocked");
+}
+
+async function loadDataTrust() {
+  const data = await apiJson("/api/data-trust");
+  renderDataTrust(data);
 }
 
 function drawEdgeChart(rows) {
@@ -1149,6 +1279,73 @@ function renderMacroEvents(data = {}) {
       `;
     })
     .join("");
+}
+
+function reflectionStatusLabel(status) {
+  const labels = {
+    open: "待处理",
+    adopted: "已采纳",
+    doing: "执行中",
+    done: "已完成",
+    dismissed: "已忽略",
+  };
+  return labels[status] || status || "--";
+}
+
+function reflectionStatusClass(status) {
+  if (status === "done") return "done";
+  if (status === "dismissed") return "dismissed";
+  if (status === "doing") return "doing";
+  if (status === "adopted") return "adopted";
+  return "open";
+}
+
+function renderReflectionTodos(data = {}) {
+  if (!els.reflectionRows) return;
+  const summary = data.summary || {};
+  const byStatus = Object.fromEntries((summary.by_status || []).map((row) => [row.status, row.count]));
+  const openCount = (byStatus.open || 0) + (byStatus.adopted || 0) + (byStatus.doing || 0);
+  if (els.reflectionRuns) els.reflectionRuns.textContent = summary.reflections ?? 0;
+  if (els.reflectionTodos) els.reflectionTodos.textContent = summary.todos ?? 0;
+  if (els.reflectionOpen) els.reflectionOpen.textContent = openCount;
+  if (els.reflectionDone) els.reflectionDone.textContent = byStatus.done || 0;
+  const latest = (data.reflections || [])[0];
+  if (els.reflectionMeta) {
+    const dt = latest?.generated_at ? new Date(latest.generated_at).toLocaleString("zh-CN") : "--";
+    els.reflectionMeta.textContent = latest ? `最新日报 ${latest.reflection_date} · ${dt}` : "暂无日报";
+  }
+  const rows = data.todos || [];
+  if (!rows.length) {
+    els.reflectionRows.innerHTML = `<div class="coverage-row"><strong>暂无 TODO</strong><span>下一次每日反思后会自动生成。</span></div>`;
+    return;
+  }
+  els.reflectionRows.innerHTML = rows.map((row) => {
+    const dt = row.updated_at ? new Date(row.updated_at).toLocaleString("zh-CN") : "--";
+    const active = row.status !== "done" && row.status !== "dismissed";
+    return `
+      <article class="reflection-row ${reflectionStatusClass(row.status)}">
+        <div class="reflection-main">
+          <div class="reflection-title">
+            <span class="priority-pill">${escapeHtml(row.priority || "P2")}</span>
+            <strong>${escapeHtml(row.title)}</strong>
+            <span class="status-pill ${reflectionStatusClass(row.status)}">${escapeHtml(reflectionStatusLabel(row.status))}</span>
+          </div>
+          <p>${escapeHtml(row.why || "")}</p>
+          <small>${escapeHtml(row.action || "")}</small>
+          ${row.note ? `<em>${escapeHtml(row.note)}</em>` : ""}
+        </div>
+        <div class="reflection-side">
+          <span>${escapeHtml(row.reflection_date || "--")} · 更新 ${dt}</span>
+          <div class="actions compact">
+            ${active ? `<button class="secondary-btn" data-reflection-action="adopted" data-todo-id="${row.id}">采纳</button>` : ""}
+            ${active ? `<button class="secondary-btn" data-reflection-action="doing" data-todo-id="${row.id}">执行中</button>` : ""}
+            ${active ? `<button class="secondary-btn" data-reflection-action="done" data-todo-id="${row.id}">完成</button>` : ""}
+            ${row.status !== "dismissed" ? `<button class="secondary-btn" data-reflection-action="dismissed" data-todo-id="${row.id}">忽略</button>` : ""}
+          </div>
+        </div>
+      </article>
+    `;
+  }).join("");
 }
 
 function renderCalibration(data = {}) {
@@ -1934,6 +2131,24 @@ async function loadMacroEvents() {
   renderMacroEvents(data);
 }
 
+async function loadReflectionTodos() {
+  if (!els.reflectionRows) return;
+  const data = await apiJson("/api/reflection-todos?limit=100");
+  renderReflectionTodos(data);
+}
+
+async function updateReflectionTodo(id, status) {
+  const note = status === "dismissed" ? "人工忽略" : status === "done" ? "人工标记完成" : "";
+  const data = await apiJson("/api/reflection-todos", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, status, note }),
+  });
+  if (!data.ok) throw new Error(data.error || "todo update failed");
+  renderReflectionTodos(data.report);
+  await loadLogs();
+}
+
 async function loadCalibration() {
   if (!els.calibrationRows) return;
   if (els.refreshCalibrationBtn) {
@@ -2081,6 +2296,7 @@ async function loadScanner() {
   try {
     const data = await apiJson("/api/scanner?limit=50&edge=0.02&min_liquidity=500&simulations=800&vol_window=90d&vol_model=factor&iv_timeout=3&orderbook=1&book_limit=8&executable_notional=100&book_timeout=4&max_book_age_seconds=120&max_spread=0.04&spot=realtime&require_realtime_spot=1&spot_timeout=4&min_expiry_minutes=30");
     renderScanner(data);
+    loadDataTrust().catch(() => {});
     els.statusText.textContent = `Scanner 已更新：${data.summary?.candidates ?? 0} 个候选`;
   } catch (error) {
     els.scannerMeta.textContent = "失败";
@@ -2224,6 +2440,7 @@ async function loadDashboard() {
     loadObservations(),
     loadAutomationHealth(),
     loadQualityAnalysis(),
+    loadReflectionTodos(),
     loadMacroEvents(),
     loadCalibration(),
     loadPaperTrading(),
@@ -2231,6 +2448,8 @@ async function loadDashboard() {
     loadCandidateReview(),
     loadLogs(),
     loadVersion(),
+    loadMarketTickers(),
+    loadDataTrust(),
   ]);
   const failed = results.filter((result) => result.status === "rejected");
   if (failed.length) {
@@ -2250,6 +2469,7 @@ if (els.saveObservationBtn) els.saveObservationBtn.addEventListener("click", sav
 if (els.refreshHealthBtn) els.refreshHealthBtn.addEventListener("click", loadAutomationHealth);
 if (els.refreshQualityBtn) els.refreshQualityBtn.addEventListener("click", loadQualityAnalysis);
 if (els.refreshMacroBtn) els.refreshMacroBtn.addEventListener("click", loadMacroEvents);
+if (els.refreshReflectionBtn) els.refreshReflectionBtn.addEventListener("click", loadReflectionTodos);
 if (els.refreshCalibrationBtn) els.refreshCalibrationBtn.addEventListener("click", loadCalibration);
 if (els.refreshPaperBtn) els.refreshPaperBtn.addEventListener("click", loadPaperTrading);
 if (els.refreshPositionsBtn) els.refreshPositionsBtn.addEventListener("click", loadPositions);
@@ -2283,6 +2503,22 @@ if (els.tradeDraftRows) {
       els.statusText.textContent = draftType === "exit" ? "平仓草稿已复制" : "订单草稿已复制";
     } catch (error) {
       els.statusText.textContent = `订单草稿复制失败：${error.message}`;
+    }
+  });
+}
+if (els.reflectionRows) {
+  els.reflectionRows.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-reflection-action]");
+    if (!button) return;
+    button.disabled = true;
+    const status = button.dataset.reflectionAction;
+    const id = Number(button.dataset.todoId);
+    try {
+      await updateReflectionTodo(id, status);
+      els.statusText.textContent = `TODO 已更新为：${reflectionStatusLabel(status)}`;
+    } catch (error) {
+      els.statusText.textContent = `TODO 更新失败：${error.message}`;
+      button.disabled = false;
     }
   });
 }
@@ -2366,6 +2602,7 @@ document.querySelectorAll(".asset-toggle").forEach((button) => {
 window.addEventListener("resize", () => {
   drawPriceChart(lastPrices);
   drawEdgeChart(lastScanner?.opportunities || []);
+  lastTickers.forEach(renderTicker);
 });
 updateTradingMode();
 setActiveView(initialViewFromHash());

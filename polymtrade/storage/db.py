@@ -163,12 +163,40 @@ create table if not exists automation_source_health (
   foreign key(run_log_id) references system_logs(id)
 );
 
+create table if not exists daily_reflections (
+  id integer primary key autoincrement,
+  reflection_date text not null,
+  generated_at text not null,
+  summary_json text not null,
+  report_path text,
+  sent integer not null default 0
+);
+
+create table if not exists reflection_todos (
+  id integer primary key autoincrement,
+  reflection_id integer,
+  reflection_date text not null,
+  created_at text not null,
+  updated_at text not null,
+  priority text not null,
+  title text not null,
+  why text not null,
+  action text not null,
+  status text not null default 'open',
+  note text,
+  foreign key(reflection_id) references daily_reflections(id),
+  unique(reflection_date, title)
+);
+
 create index if not exists idx_system_logs_created_at on system_logs(created_at desc);
 create index if not exists idx_system_logs_level on system_logs(level);
 create index if not exists idx_system_logs_module on system_logs(module);
 create index if not exists idx_automation_source_health_created_at on automation_source_health(created_at desc);
 create index if not exists idx_automation_source_health_run_log_id on automation_source_health(run_log_id);
 create index if not exists idx_automation_source_health_source on automation_source_health(source);
+create index if not exists idx_daily_reflections_date on daily_reflections(reflection_date desc);
+create index if not exists idx_reflection_todos_date on reflection_todos(reflection_date desc);
+create index if not exists idx_reflection_todos_status on reflection_todos(status);
 create index if not exists idx_candle_anomaly_reviews_reviewed_at on candle_anomaly_reviews(reviewed_at desc);
 create index if not exists idx_scanner_observations_run_id on scanner_observations(run_id);
 create index if not exists idx_scanner_observations_market_id on scanner_observations(market_id);
@@ -941,6 +969,126 @@ def insert_log(conn: sqlite3.Connection, level: str, module: str, message: str, 
     )
     conn.commit()
     return int(cur.lastrowid)
+
+
+def insert_daily_reflection(
+    conn: sqlite3.Connection,
+    *,
+    reflection_date: str,
+    generated_at: str,
+    summary: dict[str, Any],
+    todos: list[dict[str, Any]],
+    report_path: str | None = None,
+    sent: bool = False,
+) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        """
+        insert into daily_reflections (
+          reflection_date, generated_at, summary_json, report_path, sent
+        ) values (?, ?, ?, ?, ?)
+        """,
+        (reflection_date, generated_at, json.dumps(summary, ensure_ascii=False), report_path, int(sent)),
+    )
+    reflection_id = int(cur.lastrowid)
+    for item in todos:
+        conn.execute(
+            """
+            insert into reflection_todos (
+              reflection_id, reflection_date, created_at, updated_at, priority, title, why, action, status, note
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, 'open', null)
+            on conflict(reflection_date, title) do update set
+              reflection_id = excluded.reflection_id,
+              updated_at = excluded.updated_at,
+              priority = excluded.priority,
+              why = excluded.why,
+              action = excluded.action
+            """,
+            (
+                reflection_id,
+                reflection_date,
+                now,
+                now,
+                str(item.get("priority") or "P2"),
+                str(item.get("title") or "未命名 TODO"),
+                str(item.get("why") or ""),
+                str(item.get("action") or ""),
+            ),
+        )
+    conn.commit()
+    return reflection_id
+
+
+def reflection_todo_report(conn: sqlite3.Connection, limit: int = 100) -> dict[str, Any]:
+    reflections = conn.execute(
+        """
+        select *
+        from daily_reflections
+        order by reflection_date desc, id desc
+        limit 10
+        """
+    ).fetchall()
+    todos = conn.execute(
+        """
+        select t.*, r.generated_at, r.report_path, r.sent
+        from reflection_todos t
+        left join daily_reflections r on r.id = t.reflection_id
+        order by
+          case t.status
+            when 'open' then 0
+            when 'adopted' then 1
+            when 'doing' then 2
+            when 'done' then 3
+            when 'dismissed' then 4
+            else 5
+          end,
+          t.reflection_date desc,
+          case t.priority when 'P0' then 0 when 'P1' then 1 when 'P2' then 2 else 9 end,
+          t.id desc
+        limit ?
+        """,
+        (limit,),
+    ).fetchall()
+    status_rows = conn.execute(
+        """
+        select status, count(*) as count
+        from reflection_todos
+        group by status
+        """
+    ).fetchall()
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "summary": {
+            "reflections": conn.execute("select count(*) from daily_reflections").fetchone()[0],
+            "todos": conn.execute("select count(*) from reflection_todos").fetchone()[0],
+            "by_status": [dict(row) for row in status_rows],
+        },
+        "reflections": [dict(row) for row in reflections],
+        "todos": [dict(row) for row in todos],
+    }
+
+
+def update_reflection_todo(
+    conn: sqlite3.Connection,
+    todo_id: int,
+    *,
+    status: str,
+    note: str | None = None,
+) -> dict[str, Any] | None:
+    allowed = {"open", "adopted", "doing", "done", "dismissed"}
+    if status not in allowed:
+        raise ValueError(f"unsupported todo status: {status}")
+    conn.execute(
+        """
+        update reflection_todos
+        set status = ?, note = ?, updated_at = ?
+        where id = ?
+        """,
+        (status, note, datetime.now(timezone.utc).isoformat(), todo_id),
+    )
+    conn.commit()
+    row = conn.execute("select * from reflection_todos where id = ?", (todo_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def insert_automation_source_health(

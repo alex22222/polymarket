@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Polymtrade Research</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css?v=29" />
+    <link rel="stylesheet" href="/styles.css?v=34" />
   </head>
   <body>
     <main class="shell">
@@ -15,6 +15,21 @@
           <div class="brand-line">
             <h1>Polymtrade</h1>
             <span id="versionBadge" class="version-badge">version --</span>
+            <div class="market-strip" aria-label="实时加密货币行情">
+              <div class="market-card" data-ticker-card="BTC">
+                <span>BTC</span>
+                <strong id="btcTickerPrice">--</strong>
+                <small id="btcTickerChange">等待实时价格</small>
+                <canvas id="btcTickerSparkline" width="92" height="24" aria-label="BTC 走势缩略图"></canvas>
+              </div>
+              <div class="market-card" data-ticker-card="ETH">
+                <span>ETH</span>
+                <strong id="ethTickerPrice">--</strong>
+                <small id="ethTickerChange">等待实时价格</small>
+                <canvas id="ethTickerSparkline" width="92" height="24" aria-label="ETH 走势缩略图"></canvas>
+              </div>
+            </div>
+            <span id="dataTrustBadge" class="data-trust-badge">数据 --</span>
           </div>
         </div>
         <div class="actions">
@@ -70,17 +85,6 @@
         <div id="realPositionRows" class="position-rows">
           <div class="coverage-row"><strong>暂无真实持仓监控</strong><span>刷新后显示真实仓位、实时价格和触发规则。</span></div>
         </div>
-      </section>
-
-      <section class="chart-panel overview-price-panel view-section" data-view="overview">
-        <div class="section-head">
-          <h2>价格序列</h2>
-          <div class="segmented" aria-label="资产切换">
-            <button class="asset-toggle active" data-asset="BTC">BTC</button>
-            <button class="asset-toggle" data-asset="ETH">ETH</button>
-          </div>
-        </div>
-        <canvas id="priceChart" width="1100" height="420"></canvas>
       </section>
 
       <section class="macro-section overview-macro-panel view-section" data-view="overview">
@@ -146,7 +150,27 @@
           <button class="sub-tab" data-validation-tab="review">候选复盘</button>
           <button class="sub-tab" data-validation-tab="calibration">模型校准</button>
           <button class="sub-tab" data-validation-tab="quality">质量分析</button>
+          <button class="sub-tab" data-validation-tab="reflection">反思 TODO</button>
           <button class="sub-tab" data-validation-tab="observations">研究记录</button>
+        </div>
+      </section>
+
+      <section class="reflection-section view-section hidden" data-view="validation" data-validation-panel="reflection">
+        <div class="section-head">
+          <h2>反思 TODO</h2>
+          <div class="actions compact">
+            <span id="reflectionMeta">等待每日反思</span>
+            <button id="refreshReflectionBtn" class="secondary-btn">刷新 TODO</button>
+          </div>
+        </div>
+        <div class="quality-summary compact-summary">
+          <article><span>日报</span><strong id="reflectionRuns">--</strong></article>
+          <article><span>TODO</span><strong id="reflectionTodos">--</strong></article>
+          <article><span>未处理</span><strong id="reflectionOpen">--</strong></article>
+          <article><span>已完成</span><strong id="reflectionDone">--</strong></article>
+        </div>
+        <div id="reflectionRows" class="reflection-rows">
+          <div class="coverage-row"><strong>等待日报</strong><span>每日 00:30 生成反思、TODO 和飞书简报。</span></div>
         </div>
       </section>
 
@@ -484,8 +508,19 @@
         </div>
       </div>
 
+      <section class="chart-panel overview-price-panel view-section" data-view="overview">
+        <div class="section-head">
+          <h2>价格序列</h2>
+          <div class="segmented" aria-label="资产切换">
+            <button class="asset-toggle active" data-asset="BTC">BTC</button>
+            <button class="asset-toggle" data-asset="ETH">ETH</button>
+          </div>
+        </div>
+        <canvas id="priceChart" width="1100" height="420"></canvas>
+      </section>
+
       <p id="statusText" class="status-line" aria-live="polite">读取本地数据库</p>
     </main>
-    <script src="/app.js?v=65"></script>
+    <script src="/app.js?v=70"></script>
   </body>
 </html>

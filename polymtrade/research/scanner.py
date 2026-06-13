@@ -311,6 +311,10 @@ def price_context(
     raw_drift_90d = annualized_log_drift(closes, window=90)
     drift_90d = model_drift(raw_drift_90d)
     factors = market_state(asset, timeout=spot_timeout, previous=latest_observed_market_state(conn, asset))
+    candle_last = parse_datetime(ordered[-1]["ts"])
+    candle_stale_hours = None
+    if candle_last:
+        candle_stale_hours = (datetime.now(timezone.utc) - candle_last).total_seconds() / 3600.0
     return {
         "asset": asset,
         "source": spot_source,
@@ -321,6 +325,7 @@ def price_context(
         "spot_is_realtime": spot_is_realtime,
         "spot_errors": spot_errors,
         "last_ts": ordered[-1]["ts"],
+        "candle_stale_hours": candle_stale_hours,
         "candles": len(ordered),
         "volatility": vols,
         "ewma_volatility": ewma,
@@ -639,6 +644,14 @@ def add_review(
     else:
         check("spot", "warn", "使用最新日线收盘价")
 
+    candle_stale_hours = float_or_none(row.get("candle_stale_hours"))
+    if candle_stale_hours is None:
+        check("candles", "fail", "K 线新鲜度不可用")
+    elif candle_stale_hours <= 24:
+        check("candles", "pass", f"K 线 {candle_stale_hours:.1f}h 前更新")
+    else:
+        check("candles", "fail", f"K 线超过 24h 未更新：{candle_stale_hours:.1f}h")
+
     vol_source = str(row.get("annual_vol_source") or "")
     if "iv" in vol_source:
         check("vol", "pass", f"波动率使用 {vol_source}")
@@ -933,6 +946,7 @@ def scan_opportunities(
                 "spot_source": context["source"],
                 "spot_fetched_at": context.get("spot_fetched_at"),
                 "spot_is_realtime": context.get("spot_is_realtime"),
+                "candle_stale_hours": context.get("candle_stale_hours"),
                 "daily_close": context.get("daily_close"),
                 "market_state": state,
                 "short_momentum_1h": five_minute.get("momentum_1h"),
