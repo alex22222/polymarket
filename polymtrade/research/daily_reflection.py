@@ -90,6 +90,44 @@ def _progress(current: Any, target: int) -> dict[str, Any]:
     }
 
 
+def _shadow_validation_progress(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    improved = 0
+    consecutive = 0
+    deltas: list[float] = []
+    for idx, run in enumerate(runs):
+        summary = run.get("summary") or {}
+        improvement = summary.get("improvement") or {}
+        raw_delta = improvement.get("brier_delta")
+        if raw_delta is None and run.get("base_brier") is not None and run.get("shadow_brier") is not None:
+            raw_delta = float(run["base_brier"]) - float(run["shadow_brier"])
+        try:
+            delta = float(raw_delta)
+        except (TypeError, ValueError):
+            continue
+        deltas.append(delta)
+        is_better = delta > 0
+        if is_better:
+            improved += 1
+        if idx == consecutive and is_better:
+            consecutive += 1
+    target_runs = 7
+    target_consecutive = 3
+    latest_delta = deltas[0] if deltas else None
+    avg_delta = sum(deltas) / len(deltas) if deltas else None
+    return {
+        "runs": len(runs),
+        "improved_runs": improved,
+        "consecutive_improved": consecutive,
+        "target_runs": target_runs,
+        "target_consecutive": target_consecutive,
+        "runs_remaining": max(0, target_runs - len(runs)),
+        "consecutive_remaining": max(0, target_consecutive - consecutive),
+        "latest_brier_delta": latest_delta,
+        "avg_brier_delta": avg_delta,
+        "ready_for_review": len(runs) >= target_runs and consecutive >= target_consecutive and (avg_delta or 0) > 0,
+    }
+
+
 def _sql_count(conn, query: str, params: tuple[Any, ...]) -> int:
     row = conn.execute(query, params).fetchone()
     return int(row[0] or 0) if row else 0
@@ -254,8 +292,9 @@ def build_reflection(conn, *, limit: int, stake: float) -> dict[str, Any]:
     paper = paper_trading_report(conn, limit=limit, stake=stake)
     calibration = calibration_attribution_report(conn, limit=limit, stake=stake)
     quality = candidate_quality_report(conn, limit=limit, stake=stake)
-    shadow_runs = latest_shadow_training_runs(conn, limit=1)
+    shadow_runs = latest_shadow_training_runs(conn, limit=14)
     shadow_training = shadow_runs[0] if shadow_runs else None
+    shadow_progress = _shadow_validation_progress(shadow_runs)
     source_findings = _source_findings(health)
     data_findings = _quality_findings(data_quality)
     todos = build_todos(
@@ -290,6 +329,7 @@ def build_reflection(conn, *, limit: int, stake: float) -> dict[str, Any]:
         "calibration": calibration_summary,
         "quality": quality.get("summary") or {},
         "shadow_training": shadow_training,
+        "shadow_validation": shadow_progress,
         "validation_progress": {
             "candidate_50": _progress(candidate_summary.get("resolved"), 50),
             "candidate_100": _progress(candidate_summary.get("resolved"), 100),
@@ -329,6 +369,7 @@ def _daily_verdict(reflection: dict[str, Any]) -> str:
     data_quality = reflection["data_quality"]
     activity = reflection["activity"]
     candidate = reflection["candidate_review"]
+    shadow_validation = reflection.get("shadow_validation") or {}
     shadow = reflection.get("shadow_training") or {}
     shadow_summary = shadow.get("summary") or {}
     shadow_improvement = shadow_summary.get("improvement") or {}
@@ -347,6 +388,10 @@ def _daily_verdict(reflection: dict[str, Any]) -> str:
     if shadow_improvement.get("brier_delta") is not None:
         delta = float(shadow_improvement.get("brier_delta") or 0)
         verdicts.append("Shadow ML 本次优于 GBM。" if delta > 0 else "Shadow ML 本次未优于 GBM。")
+    if shadow_validation.get("runs_remaining"):
+        verdicts.append(f"Shadow ML 还需 {shadow_validation.get('runs_remaining')} 次训练观察。")
+    elif not shadow_validation.get("ready_for_review"):
+        verdicts.append("Shadow ML 尚未达到升级复核门槛。")
     if int(activity.get("errors_24h") or 0) > 0:
         verdicts.append(f"过去 24h 有 {activity.get('errors_24h')} 条错误日志，需要复核。")
     return " ".join(verdicts)
@@ -364,6 +409,7 @@ def render_report(reflection: dict[str, Any]) -> str:
     observations = reflection["observations"]
     health = reflection["health"]
     progress = reflection.get("validation_progress") or {}
+    shadow_validation = reflection.get("shadow_validation") or {}
     generated = datetime.fromisoformat(reflection["generated_at"]).strftime("%Y-%m-%d %H:%M:%S %Z")
     findings = list(reflection["data_quality"].get("findings") or []) + list(health.get("source_findings") or [])
     lines = [
@@ -388,6 +434,15 @@ def render_report(reflection: dict[str, Any]) -> str:
         _progress_line("候选复盘分组", progress.get("candidate_100") or {}),
         _progress_line("Paper trading 初判", progress.get("paper_30") or {}),
         _progress_line("模型校准初判", progress.get("calibration_50") or {}),
+        (
+            f"- Shadow ML 训练覆盖：{shadow_validation.get('runs', 0)}/{shadow_validation.get('target_runs', 7)} "
+            f"· 还差 {shadow_validation.get('runs_remaining', 0)} 次"
+        ),
+        (
+            f"- Shadow ML 稳定性：连续优于 GBM {shadow_validation.get('consecutive_improved', 0)}/"
+            f"{shadow_validation.get('target_consecutive', 3)} · 最近 14 次优于 {shadow_validation.get('improved_runs', 0)} 次 "
+            f"· 平均 Δ {_fmt_number(shadow_validation.get('avg_brier_delta'))}"
+        ),
         "",
         "4. 策略与模型表现",
         f"- 候选复盘：tracked {candidate.get('tracked', 0)} · resolved {candidate.get('resolved', 0)} · win {_fmt_percent(candidate.get('win_rate'))} · PnL {_fmt_money(candidate.get('pnl'))} · ROI {_fmt_percent(candidate.get('roi'))}",
