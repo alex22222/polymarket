@@ -21,6 +21,7 @@ from polymtrade.storage.db import (
     data_quality_report,
     insert_daily_reflection,
     insert_log,
+    latest_shadow_training_runs,
     scanner_observation_summary,
 )
 
@@ -246,6 +247,8 @@ def build_reflection(conn, *, limit: int, stake: float) -> dict[str, Any]:
     paper = paper_trading_report(conn, limit=limit, stake=stake)
     calibration = calibration_attribution_report(conn, limit=limit, stake=stake)
     quality = candidate_quality_report(conn, limit=limit, stake=stake)
+    shadow_runs = latest_shadow_training_runs(conn, limit=1)
+    shadow_training = shadow_runs[0] if shadow_runs else None
     source_findings = _source_findings(health)
     data_findings = _quality_findings(data_quality)
     todos = build_todos(
@@ -279,6 +282,7 @@ def build_reflection(conn, *, limit: int, stake: float) -> dict[str, Any]:
         "paper_trading": paper_summary,
         "calibration": calibration_summary,
         "quality": quality.get("summary") or {},
+        "shadow_training": shadow_training,
         "validation_progress": {
             "candidate_50": _progress(candidate_summary.get("resolved"), 50),
             "candidate_100": _progress(candidate_summary.get("resolved"), 100),
@@ -304,6 +308,10 @@ def render_report(reflection: dict[str, Any]) -> str:
     candidate = reflection["candidate_review"]
     paper = reflection["paper_trading"]
     calibration = reflection["calibration"]
+    shadow = reflection.get("shadow_training") or {}
+    shadow_summary = shadow.get("summary") or {}
+    shadow_metrics = shadow_summary.get("metrics") or {}
+    shadow_improvement = shadow_summary.get("improvement") or {}
     activity = reflection["activity"]
     observations = reflection["observations"]
     health = reflection["health"]
@@ -331,6 +339,7 @@ def render_report(reflection: dict[str, Any]) -> str:
         f"- 候选复盘: tracked {candidate.get('tracked', 0)} · resolved {candidate.get('resolved', 0)} · win {_fmt_percent(candidate.get('win_rate'))} · PnL {_fmt_money(candidate.get('pnl'))} · ROI {_fmt_percent(candidate.get('roi'))}",
         f"- Paper trading: tracked {paper.get('tracked', 0)} · resolved {paper.get('resolved', 0)} · open {paper.get('open', 0)} · exposure {_fmt_money(paper.get('open_exposure'))} · ROI {_fmt_percent(paper.get('roi'))}",
         f"- 校准: samples {calibration.get('samples', 0)} · resolved {calibration.get('resolved', 0)} · model Brier {calibration.get('model_brier') if calibration.get('model_brier') is not None else '--'} · market Brier {calibration.get('market_brier') if calibration.get('market_brier') is not None else '--'} · better {calibration.get('better_calibration') or '--'}",
+        f"- Shadow ML: samples {shadow_summary.get('samples', '--')} · validation {shadow_summary.get('validation_samples', '--')} · GBM Brier {shadow_metrics.get('base_brier') if shadow_metrics.get('base_brier') is not None else '--'} · shadow Brier {shadow_metrics.get('shadow_brier') if shadow_metrics.get('shadow_brier') is not None else '--'} · Δ {shadow_improvement.get('brier_delta') if shadow_improvement.get('brier_delta') is not None else '--'}",
     ]
     findings = list(reflection["data_quality"].get("findings") or []) + list(health.get("source_findings") or [])
     if findings:

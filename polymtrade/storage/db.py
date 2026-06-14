@@ -188,6 +188,20 @@ create table if not exists reflection_todos (
   unique(reflection_date, title)
 );
 
+create table if not exists shadow_training_runs (
+  id integer primary key autoincrement,
+  created_at text not null,
+  mode text not null,
+  samples integer not null,
+  train_samples integer not null,
+  validation_samples integer not null,
+  base_brier real,
+  shadow_brier real,
+  base_logloss real,
+  shadow_logloss real,
+  summary_json text not null
+);
+
 create index if not exists idx_system_logs_created_at on system_logs(created_at desc);
 create index if not exists idx_system_logs_level on system_logs(level);
 create index if not exists idx_system_logs_module on system_logs(module);
@@ -197,6 +211,7 @@ create index if not exists idx_automation_source_health_source on automation_sou
 create index if not exists idx_daily_reflections_date on daily_reflections(reflection_date desc);
 create index if not exists idx_reflection_todos_date on reflection_todos(reflection_date desc);
 create index if not exists idx_reflection_todos_status on reflection_todos(status);
+create index if not exists idx_shadow_training_runs_created_at on shadow_training_runs(created_at desc);
 create index if not exists idx_candle_anomaly_reviews_reviewed_at on candle_anomaly_reviews(reviewed_at desc);
 create index if not exists idx_scanner_observations_run_id on scanner_observations(run_id);
 create index if not exists idx_scanner_observations_market_id on scanner_observations(market_id);
@@ -1089,6 +1104,53 @@ def update_reflection_todo(
     conn.commit()
     row = conn.execute("select * from reflection_todos where id = ?", (todo_id,)).fetchone()
     return dict(row) if row else None
+
+
+def insert_shadow_training_run(conn: sqlite3.Connection, summary: dict[str, Any]) -> int:
+    metrics = summary.get("metrics") or {}
+    cur = conn.execute(
+        """
+        insert into shadow_training_runs (
+          created_at, mode, samples, train_samples, validation_samples,
+          base_brier, shadow_brier, base_logloss, shadow_logloss, summary_json
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now(timezone.utc).isoformat(),
+            str(summary.get("mode") or "shadow-logistic"),
+            int(summary.get("samples") or 0),
+            int(summary.get("train_samples") or 0),
+            int(summary.get("validation_samples") or 0),
+            metrics.get("base_brier"),
+            metrics.get("shadow_brier"),
+            metrics.get("base_logloss"),
+            metrics.get("shadow_logloss"),
+            json.dumps(summary, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def latest_shadow_training_runs(conn: sqlite3.Connection, limit: int = 5) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        select *
+        from shadow_training_runs
+        order by id desc
+        limit ?
+        """,
+        (limit,),
+    ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["summary"] = json.loads(item.get("summary_json") or "{}")
+        except json.JSONDecodeError:
+            item["summary"] = {}
+        result.append(item)
+    return result
 
 
 def insert_automation_source_health(
