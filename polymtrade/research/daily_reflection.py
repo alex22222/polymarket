@@ -60,6 +60,13 @@ def _fmt_money(value: Any) -> str:
         return "--"
 
 
+def _fmt_number(value: Any, digits: int = 4) -> str:
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return "--"
+
+
 def _fmt_age_minutes(value: Any) -> str:
     try:
         minutes = float(value)
@@ -299,9 +306,50 @@ def build_reflection(conn, *, limit: int, stake: float) -> dict[str, Any]:
 
 def _progress_line(label: str, item: dict[str, Any]) -> str:
     return (
-        f"- {label}: {item.get('current', 0)}/{item.get('target', 0)} "
+        f"- {label}：{item.get('current', 0)}/{item.get('target', 0)} "
         f"({_fmt_percent(item.get('pct'), 0)}) · 还差 {item.get('remaining', 0)}"
     )
+
+
+def _status_label(value: Any) -> str:
+    labels = {
+        "healthy": "健康",
+        "degraded": "降级",
+        "blocked": "阻断",
+        "stale": "过期",
+        "missing": "缺失",
+        "ok": "正常",
+        "observe_only": "观察",
+    }
+    return labels.get(str(value or "").lower(), str(value or "--"))
+
+
+def _daily_verdict(reflection: dict[str, Any]) -> str:
+    health = reflection["health"]
+    data_quality = reflection["data_quality"]
+    activity = reflection["activity"]
+    candidate = reflection["candidate_review"]
+    shadow = reflection.get("shadow_training") or {}
+    shadow_summary = shadow.get("summary") or {}
+    shadow_improvement = shadow_summary.get("improvement") or {}
+    findings = list(data_quality.get("findings") or []) + list(health.get("source_findings") or [])
+    verdicts = []
+    if health.get("status") in {"blocked", "missing"} or data_quality.get("status") == "blocked":
+        verdicts.append("有阻断项，先修数据/自动化。")
+    elif findings:
+        verdicts.append("系统可运行，但存在需要跟踪的降级项。")
+    else:
+        verdicts.append("系统运行正常，可以继续积累样本。")
+    if int(candidate.get("resolved") or 0) < 50:
+        verdicts.append("候选复盘样本仍不足，暂不升级策略。")
+    elif candidate.get("roi") is not None and float(candidate.get("roi") or 0) <= 0:
+        verdicts.append("候选复盘收益未证明为正，继续保持观察纪律。")
+    if shadow_improvement.get("brier_delta") is not None:
+        delta = float(shadow_improvement.get("brier_delta") or 0)
+        verdicts.append("Shadow ML 本次优于 GBM。" if delta > 0 else "Shadow ML 本次未优于 GBM。")
+    if int(activity.get("errors_24h") or 0) > 0:
+        verdicts.append(f"过去 24h 有 {activity.get('errors_24h')} 条错误日志，需要复核。")
+    return " ".join(verdicts)
 
 
 def render_report(reflection: dict[str, Any]) -> str:
@@ -316,49 +364,55 @@ def render_report(reflection: dict[str, Any]) -> str:
     observations = reflection["observations"]
     health = reflection["health"]
     progress = reflection.get("validation_progress") or {}
-    lines = [
-        "Polymtrade Loop Engineering 每日反思",
-        f"生成时间: {datetime.fromisoformat(reflection['generated_at']).strftime('%Y-%m-%d %H:%M:%S %Z')}",
-        "",
-        "一、系统执行",
-        f"- 自动化: {health.get('status') or '--'} · 最近 {_fmt_age_minutes(health.get('age_minutes'))} 前",
-        f"- 24h: run {activity['runs_24h']} · rows {activity['rows_24h']} · candidate {activity['candidates_24h']} · watch {activity['watch_24h']} · avoid {activity['avoid_24h']} · errors {activity['errors_24h']}",
-        "",
-        "二、数据积累",
-        f"- 累计观测: runs {observations.get('runs', 0)} · rows {observations.get('rows', 0)} · candidates {observations.get('candidates', 0)}",
-        f"- 24h 增量: rows +{activity['rows_24h']} · candidates +{activity['candidates_24h']} · watch +{activity['watch_24h']} · avoid +{activity['avoid_24h']}",
-        f"- 样本结构: candidate {observations.get('candidates', 0)} / rows {observations.get('rows', 0)} · 当前日报复盘窗口 {candidate.get('tracked', 0)} 条",
-        "",
-        "三、验证进展",
-        _progress_line("候选复盘初判门槛", progress.get("candidate_50") or {}),
-        _progress_line("候选复盘分组门槛", progress.get("candidate_100") or {}),
-        _progress_line("Paper trading 初判门槛", progress.get("paper_30") or {}),
-        _progress_line("模型校准初判门槛", progress.get("calibration_50") or {}),
-        "",
-        "四、模型进展",
-        f"- 候选复盘: tracked {candidate.get('tracked', 0)} · resolved {candidate.get('resolved', 0)} · win {_fmt_percent(candidate.get('win_rate'))} · PnL {_fmt_money(candidate.get('pnl'))} · ROI {_fmt_percent(candidate.get('roi'))}",
-        f"- Paper trading: tracked {paper.get('tracked', 0)} · resolved {paper.get('resolved', 0)} · open {paper.get('open', 0)} · exposure {_fmt_money(paper.get('open_exposure'))} · ROI {_fmt_percent(paper.get('roi'))}",
-        f"- 校准: samples {calibration.get('samples', 0)} · resolved {calibration.get('resolved', 0)} · model Brier {calibration.get('model_brier') if calibration.get('model_brier') is not None else '--'} · market Brier {calibration.get('market_brier') if calibration.get('market_brier') is not None else '--'} · better {calibration.get('better_calibration') or '--'}",
-        f"- Shadow ML: samples {shadow_summary.get('samples', '--')} · validation {shadow_summary.get('validation_samples', '--')} · GBM Brier {shadow_metrics.get('base_brier') if shadow_metrics.get('base_brier') is not None else '--'} · shadow Brier {shadow_metrics.get('shadow_brier') if shadow_metrics.get('shadow_brier') is not None else '--'} · Δ {shadow_improvement.get('brier_delta') if shadow_improvement.get('brier_delta') is not None else '--'}",
-    ]
+    generated = datetime.fromisoformat(reflection["generated_at"]).strftime("%Y-%m-%d %H:%M:%S %Z")
     findings = list(reflection["data_quality"].get("findings") or []) + list(health.get("source_findings") or [])
+    lines = [
+        "Polymtrade 每日系统执行简报",
+        f"生成时间：{generated}",
+        "",
+        "今日结论",
+        f"- {_daily_verdict(reflection)}",
+        "",
+        "1. 运行状态",
+        f"- 自动化状态：{_status_label(health.get('status'))} · 最近运行：{_fmt_age_minutes(health.get('age_minutes'))}前",
+        f"- 24h 扫描：run {activity['runs_24h']} · rows {activity['rows_24h']} · candidate {activity['candidates_24h']} · watch {activity['watch_24h']} · avoid {activity['avoid_24h']}",
+        f"- 24h 错误：{activity['errors_24h']} 条",
+        "",
+        "2. 数据积累",
+        f"- 累计观测：runs {observations.get('runs', 0)} · rows {observations.get('rows', 0)} · candidates {observations.get('candidates', 0)}",
+        f"- 24h 增量：rows +{activity['rows_24h']} · candidates +{activity['candidates_24h']} · watch +{activity['watch_24h']} · avoid +{activity['avoid_24h']}",
+        f"- 当前复盘窗口：{candidate.get('tracked', 0)} 条 · candidate/rows {observations.get('candidates', 0)}/{observations.get('rows', 0)}",
+        "",
+        "3. 验证进展",
+        _progress_line("候选复盘初判", progress.get("candidate_50") or {}),
+        _progress_line("候选复盘分组", progress.get("candidate_100") or {}),
+        _progress_line("Paper trading 初判", progress.get("paper_30") or {}),
+        _progress_line("模型校准初判", progress.get("calibration_50") or {}),
+        "",
+        "4. 策略与模型表现",
+        f"- 候选复盘：tracked {candidate.get('tracked', 0)} · resolved {candidate.get('resolved', 0)} · win {_fmt_percent(candidate.get('win_rate'))} · PnL {_fmt_money(candidate.get('pnl'))} · ROI {_fmt_percent(candidate.get('roi'))}",
+        f"- Paper trading：tracked {paper.get('tracked', 0)} · resolved {paper.get('resolved', 0)} · open {paper.get('open', 0)} · exposure {_fmt_money(paper.get('open_exposure'))} · ROI {_fmt_percent(paper.get('roi'))}",
+        f"- 校准对比：samples {calibration.get('samples', 0)} · resolved {calibration.get('resolved', 0)} · model Brier {_fmt_number(calibration.get('model_brier'))} · market Brier {_fmt_number(calibration.get('market_brier'))} · better {calibration.get('better_calibration') or '--'}",
+        f"- Shadow ML：samples {shadow_summary.get('samples', '--')} · validation {shadow_summary.get('validation_samples', '--')} · GBM Brier {_fmt_number(shadow_metrics.get('base_brier'))} · shadow Brier {_fmt_number(shadow_metrics.get('shadow_brier'))} · Δ {_fmt_number(shadow_improvement.get('brier_delta'))} · 状态 {_status_label(shadow_summary.get('decision') or 'observe_only')}",
+        "",
+        "5. 风险与异常",
+    ]
     if findings:
-        lines.extend(["", "五、风险/异常"])
         lines.extend(f"- {item}" for item in findings[:8])
     else:
-        lines.extend(["", "五、风险/异常", "- 暂无阻断级异常，继续观察。"])
+        lines.append("- 暂无阻断级异常，继续观察。")
     if reflection.get("best_groups") or reflection.get("worst_groups"):
         lines.append("")
-        lines.append("六、分组线索")
+        lines.append("6. 分组线索")
         for row in reflection.get("best_groups") or []:
-            lines.append(f"- 较好: {row.get('kind')}={row.get('name')} · resolved {row.get('resolved')} · ROI {_fmt_percent(row.get('roi'))}")
+            lines.append(f"- 较好：{row.get('kind')}={row.get('name')} · resolved {row.get('resolved')} · ROI {_fmt_percent(row.get('roi'))}")
         for row in reflection.get("worst_groups") or []:
-            lines.append(f"- 较差: {row.get('kind')}={row.get('name')} · resolved {row.get('resolved')} · ROI {_fmt_percent(row.get('roi'))}")
-    lines.extend(["", "七、明日 TODO"])
+            lines.append(f"- 较差：{row.get('kind')}={row.get('name')} · resolved {row.get('resolved')} · ROI {_fmt_percent(row.get('roi'))}")
+    lines.extend(["", "7. 明日 TODO"])
     for idx, todo in enumerate(reflection.get("todos") or [], 1):
         lines.append(f"{idx}. [{todo['priority']}] {todo['title']}")
-        lines.append(f"   原因: {todo['why']}")
-        lines.append(f"   动作: {todo['action']}")
+        lines.append(f"   原因：{todo['why']}")
+        lines.append(f"   动作：{todo['action']}")
     return "\n".join(lines)
 
 
