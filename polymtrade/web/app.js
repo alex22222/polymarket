@@ -52,6 +52,15 @@ const els = {
   reflectionDone: document.getElementById("reflectionDone"),
   reflectionRows: document.getElementById("reflectionRows"),
   refreshReflectionBtn: document.getElementById("refreshReflectionBtn"),
+  shadowMeta: document.getElementById("shadowMeta"),
+  shadowSamples: document.getElementById("shadowSamples"),
+  shadowValidation: document.getElementById("shadowValidation"),
+  shadowBrierDelta: document.getElementById("shadowBrierDelta"),
+  shadowDecision: document.getElementById("shadowDecision"),
+  shadowBuckets: document.getElementById("shadowBuckets"),
+  shadowRuns: document.getElementById("shadowRuns"),
+  shadowInsight: document.getElementById("shadowInsight"),
+  refreshShadowBtn: document.getElementById("refreshShadowBtn"),
   calibrationMeta: document.getElementById("calibrationMeta"),
   calibrationSamples: document.getElementById("calibrationSamples"),
   calibrationResolved: document.getElementById("calibrationResolved"),
@@ -471,7 +480,7 @@ function contextFactorLabel(context) {
 }
 
 function renderValidationPanel() {
-  const allowedPanels = new Set(["positions", "paper", "review", "calibration", "quality", "observations"]);
+  const allowedPanels = new Set(["positions", "paper", "review", "calibration", "shadow", "quality", "reflection", "observations"]);
   if (!allowedPanels.has(activeValidationPanel)) activeValidationPanel = "positions";
   document.querySelectorAll("[data-validation-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.validationTab === activeValidationPanel);
@@ -1348,6 +1357,111 @@ function renderReflectionTodos(data = {}) {
   }).join("");
 }
 
+function shadowDecisionLabel(decision) {
+  if (decision === "observe_only") return "观察";
+  if (decision === "promote_candidate") return "可候选";
+  if (decision === "disabled") return "关闭";
+  return decision || "观察";
+}
+
+function shadowDeltaClass(value) {
+  const delta = Number(value);
+  if (!Number.isFinite(delta)) return "";
+  if (delta > 0) return "positive";
+  if (delta < 0) return "negative";
+  return "";
+}
+
+function renderShadowTraining(data = {}) {
+  if (!els.shadowBuckets) return;
+  const latest = data.latest || {};
+  const summary = latest.summary || {};
+  const metrics = summary.metrics || {};
+  const improvement = summary.improvement || {};
+  const created = latest.created_at ? new Date(latest.created_at).toLocaleString("zh-CN") : "--";
+  const delta = improvement.brier_delta ?? (
+    latest.base_brier !== null && latest.shadow_brier !== null
+      ? Number(latest.base_brier) - Number(latest.shadow_brier)
+      : null
+  );
+  const deltaClass = shadowDeltaClass(delta);
+
+  if (els.shadowMeta) {
+    const mode = latest.mode || summary.mode || "shadow-logistic";
+    els.shadowMeta.textContent = latest.id ? `最近训练 #${latest.id} · ${created} · ${mode}` : "暂无训练结果";
+  }
+  if (els.shadowSamples) els.shadowSamples.textContent = latest.samples ?? summary.samples ?? "--";
+  if (els.shadowValidation) els.shadowValidation.textContent = latest.validation_samples ?? summary.validation_samples ?? "--";
+  if (els.shadowBrierDelta) {
+    els.shadowBrierDelta.innerHTML = delta === null || delta === undefined || Number.isNaN(Number(delta))
+      ? "--"
+      : `<span class="${deltaClass}">${Number(delta) >= 0 ? "+" : ""}${number(delta, 5)}</span>`;
+  }
+  if (els.shadowDecision) els.shadowDecision.textContent = shadowDecisionLabel(summary.decision);
+
+  const baseBrier = metrics.base_brier ?? latest.base_brier;
+  const shadowBrier = metrics.shadow_brier ?? latest.shadow_brier;
+  const baseLogloss = metrics.base_logloss ?? latest.base_logloss;
+  const shadowLogloss = metrics.shadow_logloss ?? latest.shadow_logloss;
+  if (els.shadowInsight) {
+    const verdict = Number(delta) > 0
+      ? "本次影子模型略优于 GBM，但仍只做观察，需连续多日稳定胜出。"
+      : Number(delta) < 0
+        ? "本次影子模型弱于 GBM，说明暂时不能升级到交易决策。"
+        : "样本不足或改善不明显，继续观察。";
+    els.shadowInsight.textContent = `${verdict} GBM Brier ${number(baseBrier, 5)} / Shadow Brier ${number(shadowBrier, 5)} · GBM logloss ${number(baseLogloss, 5)} / Shadow logloss ${number(shadowLogloss, 5)}`;
+  }
+
+  const buckets = summary.calibration_buckets || [];
+  if (!buckets.length) {
+    els.shadowBuckets.innerHTML = `<div class="coverage-row"><strong>暂无分桶</strong><span>下一次训练完成后会显示预测概率和真实命中率。</span></div>`;
+  } else {
+    els.shadowBuckets.innerHTML = buckets.map((bucket) => {
+      const actual = Number(bucket.actual_rate);
+      const shadow = Number(bucket.avg_shadow_probability);
+      const gbm = Number(bucket.avg_gbm_probability);
+      const width = Number.isFinite(actual) ? Math.max(2, Math.min(100, actual * 100)) : 2;
+      return `
+        <div class="shadow-bucket-row">
+          <div class="shadow-bucket-label">
+            <strong>${escapeHtml(bucket.bucket || "--")}</strong>
+            <span>${bucket.samples ?? 0} 样本</span>
+          </div>
+          <div class="shadow-bar-track" title="真实命中率 ${percent(actual)}">
+            <span style="width:${width}%"></span>
+          </div>
+          <div class="shadow-bucket-values">
+            <span>实际 ${percent(actual)}</span>
+            <span>Shadow ${percent(shadow)}</span>
+            <span>GBM ${percent(gbm)}</span>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  const runs = data.runs || [];
+  if (!runs.length) {
+    els.shadowRuns.innerHTML = `<div class="coverage-row"><strong>暂无历史</strong><span>每天训练一次后，这里会形成趋势。</span></div>`;
+    return;
+  }
+  els.shadowRuns.innerHTML = runs.map((run) => {
+    const runSummary = run.summary || {};
+    const runDelta = runSummary.improvement?.brier_delta ?? (
+      run.base_brier !== null && run.shadow_brier !== null ? Number(run.base_brier) - Number(run.shadow_brier) : null
+    );
+    const runCreated = run.created_at ? new Date(run.created_at).toLocaleString("zh-CN") : "--";
+    const cls = shadowDeltaClass(runDelta);
+    return `
+      <div class="shadow-run-row">
+        <strong>#${run.id} · ${escapeHtml(runCreated)}</strong>
+        <span>样本 ${run.samples ?? "--"} / 验证 ${run.validation_samples ?? "--"}</span>
+        <span>GBM ${number(run.base_brier, 5)} · Shadow ${number(run.shadow_brier, 5)} · <b class="${cls}">Δ ${runDelta === null || runDelta === undefined || Number.isNaN(Number(runDelta)) ? "--" : `${Number(runDelta) >= 0 ? "+" : ""}${number(runDelta, 5)}`}</b></span>
+      </div>
+    `;
+  }).join("");
+}
+
 function renderCalibration(data = {}) {
   const summary = data.summary || {};
   if (els.calibrationMeta) {
@@ -2137,6 +2251,33 @@ async function loadReflectionTodos() {
   renderReflectionTodos(data);
 }
 
+async function loadShadowTraining() {
+  if (!els.shadowBuckets) return;
+  if (els.refreshShadowBtn) {
+    els.refreshShadowBtn.disabled = true;
+    els.refreshShadowBtn.textContent = "刷新中...";
+  }
+  if (els.shadowMeta) els.shadowMeta.textContent = "正在读取影子模型";
+  try {
+    const data = await apiJson("/api/shadow-training?limit=14");
+    renderShadowTraining(data);
+    const latest = data.latest || {};
+    const delta = latest.summary?.improvement?.brier_delta;
+    els.statusText.textContent = latest.id
+      ? `影子模型已刷新：训练 #${latest.id}，Brier 改善 ${delta === null || delta === undefined ? "--" : number(delta, 5)}`
+      : "影子模型暂无训练记录";
+  } catch (error) {
+    if (els.shadowMeta) els.shadowMeta.textContent = "刷新失败";
+    els.statusText.textContent = `影子模型刷新失败：${error.message}`;
+    throw error;
+  } finally {
+    if (els.refreshShadowBtn) {
+      els.refreshShadowBtn.disabled = false;
+      els.refreshShadowBtn.textContent = "刷新模型";
+    }
+  }
+}
+
 async function updateReflectionTodo(id, status) {
   const note = status === "dismissed" ? "人工忽略" : status === "done" ? "人工标记完成" : "";
   const data = await apiJson("/api/reflection-todos", {
@@ -2322,7 +2463,7 @@ async function saveObservation() {
       body: JSON.stringify(lastScanner),
     });
     if (!data.ok) throw new Error(data.error || "save api failed");
-    await Promise.all([loadObservations(), loadQualityAnalysis(), loadCalibration(), loadPaperTrading(), loadPositions(), loadCandidateReview(), loadAutomationHealth(), loadLogs()]);
+    await Promise.all([loadObservations(), loadQualityAnalysis(), loadCalibration(), loadShadowTraining(), loadPaperTrading(), loadPositions(), loadCandidateReview(), loadAutomationHealth(), loadLogs()]);
     els.statusText.textContent = `已保存观测 run #${data.run_id}`;
   } catch (error) {
     els.statusText.textContent = `保存观测失败：${error.message}`;
@@ -2441,6 +2582,7 @@ async function loadDashboard() {
     loadAutomationHealth(),
     loadQualityAnalysis(),
     loadReflectionTodos(),
+    loadShadowTraining(),
     loadMacroEvents(),
     loadCalibration(),
     loadPaperTrading(),
@@ -2470,6 +2612,7 @@ if (els.refreshHealthBtn) els.refreshHealthBtn.addEventListener("click", loadAut
 if (els.refreshQualityBtn) els.refreshQualityBtn.addEventListener("click", loadQualityAnalysis);
 if (els.refreshMacroBtn) els.refreshMacroBtn.addEventListener("click", loadMacroEvents);
 if (els.refreshReflectionBtn) els.refreshReflectionBtn.addEventListener("click", loadReflectionTodos);
+if (els.refreshShadowBtn) els.refreshShadowBtn.addEventListener("click", loadShadowTraining);
 if (els.refreshCalibrationBtn) els.refreshCalibrationBtn.addEventListener("click", loadCalibration);
 if (els.refreshPaperBtn) els.refreshPaperBtn.addEventListener("click", loadPaperTrading);
 if (els.refreshPositionsBtn) els.refreshPositionsBtn.addEventListener("click", loadPositions);

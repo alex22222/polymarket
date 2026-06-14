@@ -149,6 +149,7 @@
           <button class="sub-tab" data-validation-tab="paper">Paper Trading</button>
           <button class="sub-tab" data-validation-tab="review">候选复盘</button>
           <button class="sub-tab" data-validation-tab="calibration">模型校准</button>
+          <button class="sub-tab" data-validation-tab="shadow">影子模型</button>
           <button class="sub-tab" data-validation-tab="quality">质量分析</button>
           <button class="sub-tab" data-validation-tab="reflection">反思 TODO</button>
           <button class="sub-tab" data-validation-tab="observations">研究记录</button>
@@ -218,6 +219,43 @@
             <tbody id="qualityRows"></tbody>
           </table>
         </div>
+      </section>
+
+      <section class="shadow-section view-section hidden" data-view="validation" data-validation-panel="shadow">
+        <div class="section-head">
+          <h2>影子模型</h2>
+          <div class="actions compact">
+            <span id="shadowMeta">等待训练结果</span>
+            <button id="refreshShadowBtn" class="secondary-btn">刷新模型</button>
+          </div>
+        </div>
+        <div class="quality-summary shadow-summary">
+          <article><span>训练样本</span><strong id="shadowSamples">--</strong></article>
+          <article><span>验证样本</span><strong id="shadowValidation">--</strong></article>
+          <article><span>Brier 改善</span><strong id="shadowBrierDelta">--</strong></article>
+          <article><span>决策状态</span><strong id="shadowDecision">--</strong></article>
+        </div>
+        <div class="shadow-grid">
+          <div class="shadow-panel">
+            <div class="shadow-panel-head">
+              <strong>校准分桶</strong>
+              <span>预测概率 vs 真实命中率</span>
+            </div>
+            <div id="shadowBuckets" class="shadow-buckets">
+              <div class="coverage-row"><strong>暂无分桶</strong><span>训练完成后显示每个概率区间的真实命中率。</span></div>
+            </div>
+          </div>
+          <div class="shadow-panel">
+            <div class="shadow-panel-head">
+              <strong>训练趋势</strong>
+              <span>越低越好，先观察不交易</span>
+            </div>
+            <div id="shadowRuns" class="shadow-runs">
+              <div class="coverage-row"><strong>暂无历史</strong><span>每天 00:05 会自动写入一条训练记录。</span></div>
+            </div>
+          </div>
+        </div>
+        <div id="shadowInsight" class="shadow-insight">影子模型只用于研究校准，不参与真实 scanner 和交易建议。</div>
       </section>
 
       <section class="strategy-section view-section" data-view="overview">

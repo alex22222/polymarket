@@ -40,6 +40,7 @@ from polymtrade.storage.db import (
     insert_scanner_observation_run,
     latest_scanner_observation_runs,
     latest_scanner_observations,
+    latest_shadow_training_runs,
     reflection_todo_report,
     scanner_observation_summary,
     update_reflection_todo,
@@ -407,6 +408,29 @@ class AppHandler(SimpleHTTPRequestHandler):
             limit = int(query.get("limit", ["100"])[0])
             with connect(DB_PATH) as conn:
                 self.send_json(reflection_todo_report(conn, limit=limit))
+            return
+        if path == "/api/shadow-training":
+            limit = int(query.get("limit", ["14"])[0])
+            with connect(DB_PATH) as conn:
+                runs = latest_shadow_training_runs(conn, limit=limit)
+            latest = runs[0] if runs else None
+            self.send_json(
+                {
+                    "ok": True,
+                    "latest": latest,
+                    "runs": runs,
+                    "summary": {
+                        "runs": len(runs),
+                        "latest_created_at": latest.get("created_at") if latest else None,
+                        "samples": latest.get("samples") if latest else 0,
+                        "validation_samples": latest.get("validation_samples") if latest else 0,
+                        "base_brier": latest.get("base_brier") if latest else None,
+                        "shadow_brier": latest.get("shadow_brier") if latest else None,
+                        "base_logloss": latest.get("base_logloss") if latest else None,
+                        "shadow_logloss": latest.get("shadow_logloss") if latest else None,
+                    },
+                }
+            )
             return
         if path == "/api/scanner-observations":
             limit = int(query.get("limit", ["25"])[0])
